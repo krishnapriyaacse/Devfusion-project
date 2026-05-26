@@ -1,0 +1,6 @@
+{
+  "name": "EventSphere",
+  "description": "An end-to-end event management, sandbox ticketing, check-in, and AI-personalized event discovery platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
