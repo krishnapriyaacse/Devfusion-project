@@ -1,0 +1,322 @@
+{
+  "users": [
+    {
+      "id": "org_1",
+      "email": "organizer@eventsphere.com",
+      "name": "Alex Johnson",
+      "role": "organizer",
+      "points": 250,
+      "badges": [
+        "Master Host",
+        "Trailblazer"
+      ]
+    },
+    {
+      "id": "user_1",
+      "email": "attendee@eventsphere.com",
+      "name": "Emma Watson",
+      "role": "attendee",
+      "linkedin": "https://linkedin.com/in/emma-watson-dev",
+      "github": "https://github.com/emma-watson",
+      "portfolio": "https://emmawatson.dev",
+      "interests": [
+        "Tech & AI",
+        "Music & Arts",
+        "Green Tech"
+      ],
+      "points": 450,
+      "badges": [
+        "Early Bird",
+        "Explorer"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "id": "evt_1",
+      "name": "Global AI Founders Summit 2026",
+      "date": "2026-06-15",
+      "venue": "ITC Grand Chola, Chennai",
+      "category": "Tech & AI",
+      "description": "The ultimate gathering of AI researchers, developers, and product pioneers. Engage in hands-on workshops, keynotes, and a high-yield networking session designed to connect startups with leading global VCs.",
+      "bannerImage": "https://picsum.photos/seed/aisummit/800/400",
+      "capacity": 100,
+      "registeredCount": 42,
+      "ticketTypes": [
+        {
+          "id": "t_1_1",
+          "name": "Early Bird",
+          "price": 49,
+          "type": "early_bird",
+          "description": "Discounted passes for early supporters."
+        },
+        {
+          "id": "t_1_2",
+          "name": "Regular Ticket",
+          "price": 99,
+          "type": "paid",
+          "description": "Standard conference access."
+        },
+        {
+          "id": "t_1_3",
+          "name": "VIP Pass",
+          "price": 249,
+          "type": "vip",
+          "description": "Access to private investor lounges and speaker dinners."
+        }
+      ],
+      "discountCodesValue": [
+        {
+          "code": "AISUPER",
+          "discountPercent": 20
+        },
+        {
+          "code": "FREEAI",
+          "discountPercent": 100
+        }
+      ],
+      "agenda": [
+        {
+          "time": "09:00 AM",
+          "title": "Registrations & Welcome Coffee",
+          "speaker": "Host Team",
+          "description": "Collect your custom badges and network over morning drinks."
+        },
+        {
+          "time": "10:00 AM",
+          "title": "Generative AI: The Next Decade",
+          "speaker": "Dr. Aris Vance",
+          "description": "Keynote exploring multimodal foundations, smart scaling, and physical agents."
+        },
+        {
+          "time": "11:30 AM",
+          "title": "Panel: Raising Capital in the AI Autumn",
+          "speaker": "Sonia Patel, VC",
+          "description": "Top tier investors explore funding realities and runway metrics."
+        },
+        {
+          "time": "02:00 PM",
+          "title": "Interactive Workshop: Multi-Agent Systems",
+          "speaker": "Lukas Graham",
+          "description": "Create coordinated multi-agent pipelines with local model hosting."
+        }
+      ],
+      "faq": [
+        {
+          "question": "Is lunch provided?",
+          "answer": "Yes, standard and premium vegan lunch options are included with standard and VIP tickets."
+        },
+        {
+          "question": "Can I join virtually?",
+          "answer": "This is a strictly on-premise event, but full session recordings will be emailed to VIPs."
+        }
+      ],
+      "speakers": [
+        {
+          "id": "spk_1",
+          "name": "Dr. Aris Vance",
+          "role": "AI Research Lead at NeuralLabs",
+          "bio": "Leading neural foundations, author of 40+ publications on cognitive architectures."
+        },
+        {
+          "id": "spk_2",
+          "name": "Sonia Patel",
+          "role": "Partner at Sequoia Ventures",
+          "bio": "Specializing in early-stage Deep Tech investments with 15 successful checkouts."
+        }
+      ],
+      "liveAttendeeCount": 0,
+      "checkIns": [],
+      "reviews": [
+        {
+          "id": "rev_1",
+          "userId": "user_1",
+          "userName": "Emma Watson",
+          "rating": 5,
+          "comment": "Absolutely marvelous conference. The panels were pragmatic and helpful, and the networking opportunities felt very organic!",
+          "sentiment": "Positive",
+          "date": "2026-05-16T10:00:00Z"
+        }
+      ],
+      "polls": [
+        {
+          "id": "poll_1",
+          "question": "Which AI field holds the greatest commercial potential in 2026?",
+          "options": [
+            {
+              "id": "o_1",
+              "text": "Autonomous Agents",
+              "votes": 24
+            },
+            {
+              "id": "o_2",
+              "text": "Multimodal Generation",
+              "votes": 15
+            },
+            {
+              "id": "o_3",
+              "text": "AI-aided Material Science",
+              "votes": 12
+            }
+          ]
+        }
+      ],
+      "qa": [
+        {
+          "id": "qa_1",
+          "userId": "user_1",
+          "userName": "Emma Watson",
+          "question": "Will the workshop code repository be open-sourced after the session?",
+          "votes": 8,
+          "answered": true
+        }
+      ],
+      "smartSchedule": "Suggested personalized layout:\n- Morning track focuses on venture strategy\n- Afternoon track centers on technical engineering labs.",
+      "organizerId": "org_1"
+    },
+    {
+      "id": "evt_2",
+      "name": "Symphony Under the Stars",
+      "date": "2026-07-20",
+      "venue": "Central Park Amphitheater, New York",
+      "category": "Music & Arts",
+      "description": "A classical evening of Mozart, Bach, and Vivaldi outdoors under the high summer sky. Bring your own picnic basket or enjoy our catering options from Michelin-starred local food trucks.",
+      "bannerImage": "https://picsum.photos/seed/symphony/800/400",
+      "capacity": 500,
+      "registeredCount": 150,
+      "ticketTypes": [
+        {
+          "id": "t_2_1",
+          "name": "Regular Admission",
+          "price": 30,
+          "type": "paid",
+          "description": "Lawn seating, bring your blankets."
+        },
+        {
+          "id": "t_2_2",
+          "name": "VIP Dining Experience",
+          "price": 120,
+          "type": "vip",
+          "description": "Front rows seat with custom premium cheese and wine platter."
+        }
+      ],
+      "discountCodesValue": [
+        {
+          "code": "MUSIC10",
+          "discountPercent": 10
+        }
+      ],
+      "agenda": [
+        {
+          "time": "06:30 PM",
+          "title": "Gates Open & Dining",
+          "speaker": "Gourmet Trucks",
+          "description": "Select your food and claim a nice spot on the grand lawn."
+        },
+        {
+          "time": "07:30 PM",
+          "title": "Act I: Vivaldi’s Four Seasons",
+          "speaker": "Manhattan Philharmonic",
+          "description": "A gorgeous arrangement by conductor Alan Sterling."
+        },
+        {
+          "time": "08:45 PM",
+          "title": "Act II: Mozart’s Symphony No. 40",
+          "speaker": "Manhattan Philharmonic",
+          "description": "The soaring centerpiece of our outdoor recital."
+        }
+      ],
+      "faq": [
+        {
+          "question": "What if it rains?",
+          "answer": "In case of rain, the concert shifts immediately to the adjacent indoor Grand Glass Atrium."
+        }
+      ],
+      "speakers": [
+        {
+          "id": "spk_3",
+          "name": "Alan Sterling",
+          "role": "Conductor",
+          "bio": "Renowned conductor celebrating 25 seasons with Manhattan Philharmonic."
+        }
+      ],
+      "liveAttendeeCount": 0,
+      "checkIns": [],
+      "reviews": [],
+      "polls": [],
+      "qa": [],
+      "organizerId": "org_1"
+    },
+    {
+      "id": "evt_3",
+      "name": "Sustainable Tech Hackathon 2026",
+      "date": "2026-08-10",
+      "venue": "IIT Madras Research Park, Chennai",
+      "category": "Green Tech",
+      "description": "Collaborate, code, and design low-carbon software solutions. Solve real-world climate problems and compete for $15,000 in non-dilutive grant prizes.",
+      "bannerImage": "https://picsum.photos/seed/green/800/400",
+      "capacity": 120,
+      "registeredCount": 8,
+      "ticketTypes": [
+        {
+          "id": "t_3_1",
+          "name": "Free Hackathon Ticket",
+          "price": 0,
+          "type": "free",
+          "description": "Standard pass including all meals, team matching, and access to mentorship."
+        }
+      ],
+      "agenda": [
+        {
+          "time": "09:00 AM",
+          "title": "Idea Pitching & Team Formations",
+          "speaker": "Mentor Panel",
+          "description": "Pitch your ideas and find talented team members."
+        }
+      ],
+      "faq": [
+        {
+          "question": "Do I need a pre-formed team?",
+          "answer": "No, most attendees form teams during the opening breakfast matching session."
+        }
+      ],
+      "speakers": [
+        {
+          "id": "spk_4",
+          "name": "Prof. S. Prasad",
+          "role": "Ecolabs India Founder",
+          "bio": "Pioneering researcher in high-efficiency grid software and local circular solutions."
+        }
+      ],
+      "liveAttendeeCount": 0,
+      "checkIns": [],
+      "reviews": [],
+      "polls": [],
+      "qa": [],
+      "organizerId": "org_1"
+    }
+  ],
+  "bookings": [
+    {
+      "id": "b_101",
+      "userId": "user_1",
+      "eventId": "evt_1",
+      "eventName": "Global AI Founders Summit 2026",
+      "eventDate": "2026-06-15",
+      "eventVenue": "ITC Grand Chola, Chennai",
+      "tickets": [
+        {
+          "ticketTypeId": "t_1_2",
+          "ticketTypeName": "Regular Ticket",
+          "quantity": 2,
+          "price": 99
+        }
+      ],
+      "totalAmount": 198,
+      "bookingDate": "2026-05-20T12:00:00Z",
+      "status": "confirmed",
+      "qrCode": "evt_1:b_101",
+      "checkedIn": false
+    }
+  ]
+}
