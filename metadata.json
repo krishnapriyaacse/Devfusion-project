@@ -1,6 +1,6 @@
 {
   "name": "EventSphere",
-  "description": "An end-to-end event management, sandbox ticketing, check-in, and AI-personalized event discovery platform.",
+  "description": "A complete smart event management and ticketing platform with dual dashboards, sandbox payments, auto-certificates, and advanced Gemini-powered AI features.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

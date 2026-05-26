@@ -1,1229 +1,840 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+import express from "express";
+import path from "path";
+import fs from "fs";
+import { createServer as createViteServer } from "vite";
+import { GoogleGenAI, Type } from "@google/genai";
+import dotenv from "dotenv";
 
-import express from 'express';
-import path from 'path';
-import fs from 'fs';
-import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type } from '@google/genai';
-import { 
-  Event, 
-  Registration, 
-  UserProfile, 
-  PayoutStats, 
-  Review, 
-  Poll 
-} from './src/types';
+dotenv.config();
 
-// Define DB structure for easy loading/saving
-interface UserRecord {
-  email: string;
-  name: string;
-  passwordHash: string;
-  linkedinUrl?: string;
-  savedCategories: string[];
-  wishlistedEvents: string[];
-  attendedEventIds: string[];
-  badges: any[];
-}
+const app = express();
+const PORT = 3000;
 
-interface DatabaseSchema {
-  events: Event[];
-  registrations: Registration[];
-  userProfile: UserProfile;
-  payouts: PayoutStats;
-  users?: UserRecord[];
-}
+app.use(express.json());
 
-const DATABASE_FILE = path.join(process.cwd(), 'database.json');
-
-// Initialize Gemini client lazily
-let aiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI | null {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
-      aiClient = new GoogleGenAI({
-        apiKey: apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
-    }
+// Initialize Gemini Client safely
+let ai: GoogleGenAI | null = null;
+if (process.env.GEMINI_API_KEY) {
+  try {
+    ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+    console.log("Gemini Client initialized successfully on server side.");
+  } catch (error) {
+    console.error("Failed to initialize Gemini Client:", error);
   }
-  return aiClient;
+} else {
+  console.log("No GEMINI_API_KEY found, running AI features in fallback simulation mode.");
 }
 
-// Initial Seed Data if DB is empty
-const defaultSeedData = (): DatabaseSchema => {
-  const eventsList: Event[] = [
+// Low-profile persistent database file
+const DB_FILE = path.join(process.cwd(), "db.json");
+
+// Define state interfaces
+import { User, Event, Booking, Review, Poll, QAItem, TicketType } from "./src/types";
+
+interface DBState {
+  users: User[];
+  events: Event[];
+  bookings: Booking[];
+}
+
+// Initial default mock data
+const INITIAL_STATE: DBState = {
+  users: [
     {
-      id: 'evt-ai-tech-2026',
-      name: 'Global AI & Tech Summit 2026',
-      date: '2026-06-15',
-      time: '09:00',
-      venue: 'Metropolitan Convention Hall (Hall B)',
-      city: 'San Francisco',
-      category: 'Tech',
-      description: 'Join developers, engineers, and tech visionaries to explore the frontier of Generative AI, agentic systems, and high-performance computing. Features 15+ keynote speakers, intense panel debates, and interactive project showrooms.',
-      bannerImage: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #311042 100%)', // Visual indicator, styled beautifully on client too
-      tickets: [
-        { id: 'tkt-1', name: 'General Admission', price: 99, capacity: 500, remainingCapacity: 482 },
-        { id: 'tkt-2', name: 'VIP Pass', price: 299, capacity: 100, remainingCapacity: 95 },
-        { id: 'tkt-3', name: 'Early Bird Ticket', price: 49, capacity: 150, remainingCapacity: 0 } // Sold out
-      ],
-      discounts: [
-        { code: 'AIFUTURE', discountPercent: 20, expiryDate: '2026-06-01' },
-        { code: 'STUDENT50', discountPercent: 50, expiryDate: '2026-06-14' }
-      ],
-      faq: [
-        { q: 'Is a virtual ticket option available?', a: 'Yes, General Admission tickets include access to high-definition streams of all sessions.' },
-        { q: 'Are meals included in the ticket?', a: 'VIP Passes include gourmet lunch and entry to the networking dinner. General passes include access to beverage stands.' }
-      ],
-      speakers: [
-        { name: 'Dr. Evelyn Carter', role: 'Head of AI Research at SynthAI', avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&h=150&fit=crop' },
-        { name: 'Marcus Sterling', role: 'Lead Architect, QuantumScale', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop' }
-      ],
-      agenda: [
-        { id: 'ag-1', time: '09:00 - 10:00', title: 'Opening Keynote: Next-Gen Agent Architectures', description: 'Dr. Evelyn Carter shares the roadmap for multi-agent coordination models.', speaker: 'Dr. Evelyn Carter' },
-        { id: 'ag-2', time: '10:30 - 11:30', title: 'Scaling Inference Under Pressure', description: 'Technical guide on handling peak multi-million token traffic queues.', speaker: 'Marcus Sterling' }
-      ],
-      reviews: [
-        { id: 'rev-1', userName: 'Alice Jenkins', rating: 5, text: 'Attended the last one and it completely evolved how our project structured its pipelines. Highly recommended!', date: '2025-11-20', linkedin: 'https://linkedin.com/in/alice-jenkins-demo' }
-      ],
-      polls: [
-        {
-          id: 'poll-1',
-          question: 'Which keynote session are you most excited about?',
-          options: [
-            { id: 'opt-1', text: 'Agent Architectures', votes: 42 },
-            { id: 'opt-2', text: 'Quantum Tech Showcase', votes: 19 },
-            { id: 'opt-3', text: 'Stripe API Deep Dive', votes: 12 }
-          ],
-          active: true
-        }
-      ],
-      chat: [
-        { id: 'ct-1', sender: 'Organizer Bot', message: 'Welcome to the Event Chat! Feel free to network, ask questions of the speakers, or find roommates.', timestamp: '2026-05-25T14:30:10.000Z' }
-      ]
+      id: "org_1",
+      email: "organizer@eventsphere.com",
+      name: "Alex Johnson",
+      role: "organizer",
+      points: 250,
+      badges: ["Master Host", "Trailblazer"]
     },
     {
-      id: 'evt-neon-music-2026',
-      name: 'Neon Horizon Music Festival',
-      date: '2026-07-20',
-      time: '17:00',
-      venue: 'Sunset Amphitheatre',
-      city: 'Los Angeles',
-      category: 'Music',
-      description: 'An immersive open-air audio-visual celebration of synthesizers, synthwave, electronic dance, and ambient retro-beats. Features towering light frames, state-of-the-art acoustics, and gourmet catering trucks.',
-      bannerImage: 'linear-gradient(135deg, #180020 0%, #300045 50%, #ff007f 100%)',
-      tickets: [
-        { id: 'tkt-a', name: 'General Admission', price: 65, capacity: 1500, remainingCapacity: 1450 },
-        { id: 'tkt-b', name: 'Front Row PIT VIP', price: 180, capacity: 200, remainingCapacity: 194 }
+      id: "user_1",
+      email: "attendee@eventsphere.com",
+      name: "Emma Watson",
+      role: "attendee",
+      linkedin: "https://linkedin.com/in/emma-watson-dev",
+      github: "https://github.com/emma-watson",
+      portfolio: "https://emmawatson.dev",
+      interests: ["Tech & AI", "Music & Arts", "Green Tech"],
+      points: 450,
+      badges: ["Early Bird", "Explorer"]
+    }
+  ],
+  events: [
+    {
+      id: "evt_1",
+      name: "Global AI Founders Summit 2026",
+      date: "2026-06-15",
+      venue: "ITC Grand Chola, Chennai",
+      category: "Tech & AI",
+      description: "The ultimate gathering of AI researchers, developers, and product pioneers. Engage in hands-on workshops, keynotes, and a high-yield networking session designed to connect startups with leading global VCs.",
+      bannerImage: "https://picsum.photos/seed/aisummit/800/400",
+      capacity: 100,
+      registeredCount: 42,
+      ticketTypes: [
+        { id: "t_1_1", name: "Early Bird", price: 49, type: "early_bird", description: "Discounted passes for early supporters." },
+        { id: "t_1_2", name: "Regular Ticket", price: 99, type: "paid", description: "Standard conference access." },
+        { id: "t_1_3", name: "VIP Pass", price: 249, type: "vip", description: "Access to private investor lounges and speaker dinners." }
       ],
-      discounts: [
-        { code: 'RETROWAVE', discountPercent: 15, expiryDate: '2026-07-01' }
-      ],
-      faq: [
-        { q: 'Is there parking available?', a: 'Parking is fully available on-site. We strongly encourage carpooling or ride-sharing.' },
-        { q: 'What age group is allowed?', a: 'This is a strictly 18+ event.' }
-      ],
-      speakers: [
-        { name: 'DJ VoidPulse', role: 'Electronic Producer & DJ', avatar: 'https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?w=150&h=150&fit=crop' },
-        { name: 'Sora Glass', role: 'Laser Visual Artist Designer', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&h=150&fit=crop' }
+      discountCodesValue: [
+        { code: "AISUPER", discountPercent: 20 },
+        { code: "FREEAI", discountPercent: 100 }
       ],
       agenda: [
-        { id: 'ag-a1', time: '17:00 - 19:30', title: 'Sunset Warmup Live DJ Set', description: 'Synthwave rhythms and retro beats to welcome the golden hour.', speaker: 'DJ VoidPulse' },
-        { id: 'ag-a2', time: '20:00 - 23:00', title: 'Neon Laser Symphony & Headline Act', description: 'An mind-bending live spatial sound & laser light design performance.', speaker: 'Sora Glass & DJ VoidPulse' }
+        { time: "09:00 AM", title: "Registrations & Welcome Coffee", speaker: "Host Team", description: "Collect your custom badges and network over morning drinks." },
+        { time: "10:00 AM", title: "Generative AI: The Next Decade", speaker: "Dr. Aris Vance", description: "Keynote exploring multimodal foundations, smart scaling, and physical agents." },
+        { time: "11:30 AM", title: "Panel: Raising Capital in the AI Autumn", speaker: "Sonia Patel, VC", description: "Top tier investors explore funding realities and runway metrics." },
+        { time: "02:00 PM", title: "Interactive Workshop: Multi-Agent Systems", speaker: "Lukas Graham", description: "Create coordinated multi-agent pipelines with local model hosting." }
       ],
+      faq: [
+        { question: "Is lunch provided?", answer: "Yes, standard and premium vegan lunch options are included with standard and VIP tickets." },
+        { question: "Can I join virtually?", answer: "This is a strictly on-premise event, but full session recordings will be emailed to VIPs." }
+      ],
+      speakers: [
+        { id: "spk_1", name: "Dr. Aris Vance", role: "AI Research Lead at NeuralLabs", bio: "Leading neural foundations, author of 40+ publications on cognitive architectures." },
+        { id: "spk_2", name: "Sonia Patel", role: "Partner at Sequoia Ventures", bio: "Specializing in early-stage Deep Tech investments with 15 successful checkouts." }
+      ],
+      liveAttendeeCount: 0,
+      checkIns: [],
       reviews: [
-        { id: 'rev-2', userName: 'Tyler Chase', rating: 4, text: 'Absolutely love the laser curation every year. Vibes are unmatched.', date: '2026-01-10' }
+        { id: "rev_1", userId: "user_1", userName: "Emma Watson", rating: 5, comment: "Absolutely marvelous conference. The panels were pragmatic and helpful, and the networking opportunities felt very organic!", sentiment: "Positive", date: "2026-05-16T10:00:00Z" }
       ],
       polls: [
-        {
-          id: 'poll-2',
-          question: 'Should we add a chillout lounge stream for the virtual ticket holders?',
-          options: [
-            { id: 'opt-a1', text: 'Yes, absolutely!', votes: 85 },
-            { id: 'opt-a2', text: 'No, focus purely on main stage stream', votes: 15 }
-          ],
-          active: true
-        }
+        { id: "poll_1", question: "Which AI field holds the greatest commercial potential in 2026?", options: [
+          { id: "o_1", text: "Autonomous Agents", votes: 24 },
+          { id: "o_2", text: "Multimodal Generation", votes: 15 },
+          { id: "o_3", text: "AI-aided Material Science", votes: 12 }
+        ]}
       ],
-      chat: []
+      qa: [
+        { id: "qa_1", userId: "user_1", userName: "Emma Watson", question: "Will the workshop code repository be open-sourced after the session?", votes: 8, answered: true }
+      ],
+      smartSchedule: "Suggested personalized layout:\n- Morning track focuses on venture strategy\n- Afternoon track centers on technical engineering labs.",
+      organizerId: "org_1"
     },
     {
-      id: 'evt-street-food-2026',
-      name: 'Gourmet Street Food Fest',
-      date: '2026-09-12',
-      time: '11:00',
-      venue: 'Central Park West Walkway',
-      city: 'New York',
-      category: 'Food',
-      description: 'Taste the globe in one majestic weekend! NYCs most incredible culinary artisans, food trucks, and craft cider houses assemble for an unforgettable sensory exploration. Plus live street buskers, pop contests, and chef cook-offs.',
-      bannerImage: 'linear-gradient(135deg, #451a03 0%, #78350f 50%, #d97706 100%)',
-      tickets: [
-        { id: 'tkt-f1', name: 'Free Entry RSVP', price: 0, capacity: 2000, remainingCapacity: 1980 },
-        { id: 'tkt-f2', name: 'VIP Tasting Pass (5 Coupons)', price: 45, capacity: 300, remainingCapacity: 290 }
+      id: "evt_2",
+      name: "Symphony Under the Stars",
+      date: "2026-07-20",
+      venue: "Central Park Amphitheater, New York",
+      category: "Music & Arts",
+      description: "A classical evening of Mozart, Bach, and Vivaldi outdoors under the high summer sky. Bring your own picnic basket or enjoy our catering options from Michelin-starred local food trucks.",
+      bannerImage: "https://picsum.photos/seed/symphony/800/400",
+      capacity: 500,
+      registeredCount: 150,
+      ticketTypes: [
+        { id: "t_2_1", name: "Regular Admission", price: 30, type: "paid", description: "Lawn seating, bring your blankets." },
+        { id: "t_2_2", name: "VIP Dining Experience", price: 120, type: "vip", description: "Front rows seat with custom premium cheese and wine platter." }
       ],
-      discounts: [],
-      faq: [
-        { q: 'Are dogs allowed?', a: 'Yes! Central Park is dog-friendly, but keep pets securely on a leash.' }
-      ],
-      speakers: [
-        { name: 'Chef Renée Laurent', role: 'Michelin Star Street Food Innovator', avatar: 'https://images.unsplash.com/photo-1581092921461-eab62e97a780?w=150&h=150&fit=crop' }
+      discountCodesValue: [
+        { code: "MUSIC10", discountPercent: 10 }
       ],
       agenda: [
-        { id: 'ag-f1', time: '12:00 - 13:00', title: 'Art of the Woodfired Neapolitan Pizza', description: 'Learn dough fermentation and firing techniques live.', speaker: 'Chef Renée Laurent' }
+        { time: "06:30 PM", title: "Gates Open & Dining", speaker: "Gourmet Trucks", description: "Select your food and claim a nice spot on the grand lawn." },
+        { time: "07:30 PM", title: "Act I: Vivaldi’s Four Seasons", speaker: "Manhattan Philharmonic", description: "A gorgeous arrangement by conductor Alan Sterling." },
+        { time: "08:45 PM", title: "Act II: Mozart’s Symphony No. 40", speaker: "Manhattan Philharmonic", description: "The soaring centerpiece of our outdoor recital." }
       ],
+      faq: [
+        { question: "What if it rains?", answer: "In case of rain, the concert shifts immediately to the adjacent indoor Grand Glass Atrium." }
+      ],
+      speakers: [
+        { id: "spk_3", name: "Alan Sterling", role: "Conductor", bio: "Renowned conductor celebrating 25 seasons with Manhattan Philharmonic." }
+      ],
+      liveAttendeeCount: 0,
+      checkIns: [],
       reviews: [],
       polls: [],
-      chat: []
-    }
-  ];
-
-  const registrationsList: Registration[] = [
+      qa: [],
+      organizerId: "org_1"
+    },
     {
-      id: 'reg-demo-1',
-      eventId: 'evt-ai-tech-2026',
-      eventName: 'Global AI & Tech Summit 2026',
-      eventDate: '2026-06-15',
-      eventTime: '09:00',
-      eventVenue: 'Metropolitan Convention Hall (Hall B)',
-      attendeeName: 'John Doe',
-      attendeeEmail: 'jaishreer2206@gmail.com',
-      linkedinUrl: 'https://linkedin.com/in/johndoetech',
-      ticketsPurchased: [
-        { ticketTypeName: 'General Admission', quantity: 2, price: 99 },
-        { ticketTypeName: 'VIP Pass', quantity: 1, price: 299 }
+      id: "evt_3",
+      name: "Sustainable Tech Hackathon 2026",
+      date: "2026-08-10",
+      venue: "IIT Madras Research Park, Chennai",
+      category: "Green Tech",
+      description: "Collaborate, code, and design low-carbon software solutions. Solve real-world climate problems and compete for $15,000 in non-dilutive grant prizes.",
+      bannerImage: "https://picsum.photos/seed/green/800/400",
+      capacity: 120,
+      registeredCount: 8,
+      ticketTypes: [
+        { id: "t_3_1", name: "Free Hackathon Ticket", price: 0, type: "free", description: "Standard pass including all meals, team matching, and access to mentorship." }
       ],
-      totalAmount: 497,
-      discountApplied: 'STUDENT50',
-      qrCode: 'EVTSPHERE-reg-demo-1-evt-ai-tech-2026',
-      checkedIn: false,
-      createdAt: '2026-05-20T10:00:00.000Z'
+      agenda: [
+        { time: "09:00 AM", title: "Idea Pitching & Team Formations", speaker: "Mentor Panel", description: "Pitch your ideas and find talented team members." }
+      ],
+      faq: [
+        { question: "Do I need a pre-formed team?", answer: "No, most attendees form teams during the opening breakfast matching session." }
+      ],
+      speakers: [
+        { id: "spk_4", name: "Prof. S. Prasad", role: "Ecolabs India Founder", bio: "Pioneering researcher in high-efficiency grid software and local circular solutions." }
+      ],
+      liveAttendeeCount: 0,
+      checkIns: [],
+      reviews: [],
+      polls: [],
+      qa: [],
+      organizerId: "org_1"
     }
-  ];
-
-  const profile: UserProfile = {
-    email: 'jaishreer2206@gmail.com',
-    name: 'Jane Smith',
-    linkedinUrl: 'https://linkedin.com/in/janesmith-developer',
-    savedCategories: ['Tech', 'Music'],
-    wishlistedEvents: ['evt-neon-music-2026'],
-    attendedEventIds: [],
-    badges: [
-      { name: 'Event Pioneer', description: 'Signed up as an early adopter of EventSphere.', icon: 'Award', awardedAt: '2026-05-26T06:00:00.000Z' }
-    ]
-  };
-
-  const payoutData: PayoutStats = {
-    totalRevenue: 497,
-    payoutsCompleted: 0,
-    currentBalance: 497,
-    payoutsList: []
-  };
-
-  return {
-    events: eventsList,
-    registrations: registrationsList,
-    userProfile: profile,
-    payouts: payoutData,
-    users: [
-      {
-        email: profile.email,
-        name: profile.name,
-        passwordHash: 'password123',
-        linkedinUrl: profile.linkedinUrl,
-        savedCategories: profile.savedCategories,
-        wishlistedEvents: profile.wishlistedEvents,
-        attendedEventIds: profile.attendedEventIds,
-        badges: profile.badges
-      }
-    ]
-  };
+  ],
+  bookings: [
+    {
+      id: "b_101",
+      userId: "user_1",
+      eventId: "evt_1",
+      eventName: "Global AI Founders Summit 2026",
+      eventDate: "2026-06-15",
+      eventVenue: "ITC Grand Chola, Chennai",
+      tickets: [
+        { ticketTypeId: "t_1_2", ticketTypeName: "Regular Ticket", quantity: 2, price: 99 }
+      ],
+      totalAmount: 198,
+      bookingDate: "2026-05-20T12:00:00Z",
+      status: "confirmed",
+      qrCode: "evt_1:b_101",
+      checkedIn: false
+    }
+  ]
 };
 
-// Database loader/saver helper
-let dbCache: DatabaseSchema | null = null;
-
-function loadDatabase(): DatabaseSchema {
-  if (dbCache) return dbCache;
+// Database utility
+function loadDB(): DBState {
   try {
-    if (fs.existsSync(DATABASE_FILE)) {
-      const raw = fs.readFileSync(DATABASE_FILE, 'utf-8');
-      dbCache = JSON.parse(raw);
-      // Fallback if missing elements
-      if (dbCache) {
-        if (!dbCache.events) dbCache.events = [];
-        if (!dbCache.registrations) dbCache.registrations = [];
-        if (!dbCache.userProfile) dbCache.userProfile = defaultSeedData().userProfile;
-        if (!dbCache.payouts) dbCache.payouts = defaultSeedData().payouts;
-        if (!dbCache.users) {
-          dbCache.users = [
-            {
-              email: dbCache.userProfile.email,
-              name: dbCache.userProfile.name,
-              passwordHash: 'password123',
-              linkedinUrl: dbCache.userProfile.linkedinUrl,
-              savedCategories: dbCache.userProfile.savedCategories || [],
-              wishlistedEvents: dbCache.userProfile.wishlistedEvents || [],
-              attendedEventIds: dbCache.userProfile.attendedEventIds || [],
-              badges: dbCache.userProfile.badges || []
-            }
-          ];
-        }
-        return dbCache;
-      }
+    if (fs.existsSync(DB_FILE)) {
+      const content = fs.readFileSync(DB_FILE, "utf-8");
+      return JSON.parse(content);
     }
-  } catch (err) {
-    console.error('Error reading database file, using fallback.', err);
+  } catch (error) {
+    console.error("Error reading database file, using defaults:", error);
   }
-  
-  // Seed database
-  dbCache = defaultSeedData();
-  saveDatabase(dbCache);
-  return dbCache;
+  return INITIAL_STATE;
 }
 
-function saveDatabase(data: DatabaseSchema): void {
+function saveDB(state: DBState) {
   try {
-    fs.writeFileSync(DATABASE_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing database to disk.', err);
+    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Error saving database file:", error);
   }
 }
 
-// Helper to extract authenticated user from dynamic request headers
-function getCurrentUser(req: express.Request): UserRecord | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return null;
-  const parts = authHeader.split(' ');
-  if (parts.length === 2 && parts[0] === 'Bearer') {
-    const emailToken = parts[1].toLowerCase();
-    const db = loadDatabase();
-    if (db.users) {
-      const user = db.users.find(u => u.email.toLowerCase() === emailToken);
-      return user || null;
-    }
-  }
-  return null;
+// In-Memory cache of State
+let dbState = loadDB();
+
+// Sync in case DB gets updated or initially created
+if (!fs.existsSync(DB_FILE)) {
+  saveDB(dbState);
 }
 
-// Kickstart server and Vite
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+// --- AUTH ENDPOINTS ---
+app.post("/api/auth/register", (req, res) => {
+  const { name, email, password, role, interests, linkedin, github, portfolio } = req.body;
+  if (!name || !email || !password || !role) {
+    return res.status(400).json({ error: "Missing required register parameters." });
+  }
 
-  app.use(express.json());
+  const existing = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  if (existing) {
+    return res.status(400).json({ error: "A user with this email already exists." });
+  }
 
-  // Set response headers for CORS, etc (just to be clean)
-  app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-    next();
-  });
+  const newUser: User = {
+    id: `u_${Date.now()}`,
+    email,
+    name,
+    role,
+    linkedin: linkedin || "",
+    github: github || "",
+    portfolio: portfolio || "",
+    interests: interests || ["Tech & AI"],
+    points: 100, // starting points
+    badges: ["Novice Explorer"]
+  };
 
-  // Load clean Database on startup
-  loadDatabase();
+  dbState.users.push(newUser);
+  saveDB(dbState);
+  res.status(201).json({ message: "Registration successful!", user: newUser });
+});
 
-  // ----------------------------------------------------
-  // EVENT ROUTES
-  // ----------------------------------------------------
+app.post("/api/auth/login", (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required." });
+  }
+
+  // Standard development sandbox credentials checking
+  const user = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  if (!user) {
+    return res.status(404).json({ error: "No user found with this email." });
+  }
+
+  // dev sandbox permits any password
+  res.json({ message: "Welcome back!", user });
+});
+
+// Update profile details, networking cards, etc.
+app.post("/api/auth/update-profile", (req, res) => {
+  const { id, linkedin, github, portfolio, interests } = req.body;
+  const userIndex = dbState.users.findIndex(u => u.id === id);
+  if (userIndex === -1) {
+    return res.status(404).json({ error: "User not found." });
+  }
+
+  dbState.users[userIndex].linkedin = linkedin;
+  dbState.users[userIndex].github = github;
+  dbState.users[userIndex].portfolio = portfolio;
+  dbState.users[userIndex].interests = interests;
+
+  saveDB(dbState);
+  res.json({ message: "Profile card updated successfully!", user: dbState.users[userIndex] });
+});
+
+// Leaders leaderboard
+app.get("/api/users/leaderboard", (req, res) => {
+  const leaders = dbState.users
+    .map(u => ({ id: u.id, name: u.name, points: u.points || 0, badges: u.badges || [] }))
+    .sort((a, b) => b.points - a.points)
+    .slice(0, 10);
+  res.json(leaders);
+});
+
+// --- EVENT MANAGEMENT ENDPOINTS ---
+app.get("/api/events", (req, res) => {
+  res.json(dbState.events);
+});
+
+app.get("/api/events/:id", (req, res) => {
+  const event = dbState.events.find(e => e.id === req.params.id);
+  if (!event) {
+    return res.status(404).json({ error: "Event not found" });
+  }
+  res.json(event);
+});
+
+// Create event (Organizer only)
+app.post("/api/events", (req, res) => {
+  const {
+    name, date, venue, category, description, bannerImage, capacity,
+    ticketTypes, discountCodesValue, agenda, faq, speakers, organizerId
+  } = req.body;
+
+  if (!name || !date || !venue || !category || !description || !organizerId) {
+    return res.status(400).json({ error: "Missing required event fields." });
+  }
+
+  const newEvent: Event = {
+    id: `evt_${Date.now()}`,
+    name,
+    date,
+    venue,
+    category,
+    description,
+    bannerImage: bannerImage || `https://picsum.photos/seed/event-${Date.now()}/800/400`,
+    capacity: Number(capacity) || 100,
+    registeredCount: 0,
+    ticketTypes: ticketTypes || [
+      { id: `t_${Date.now()}_1`, name: "General Admission", price: 0, type: "free", description: "Standard free pass." }
+    ],
+    discountCodesValue: discountCodesValue || [],
+    agenda: agenda || [],
+    faq: faq || [],
+    speakers: speakers || [],
+    liveAttendeeCount: 0,
+    checkIns: [],
+    reviews: [],
+    polls: [],
+    qa: [],
+    organizerId
+  };
+
+  // Give points to organizer on hosting event
+  const userIndex = dbState.users.findIndex(u => u.id === organizerId);
+  if (userIndex !== -1) {
+    const points = dbState.users[userIndex].points || 0;
+    dbState.users[userIndex].points = points + 200;
+    const currentBadges = dbState.users[userIndex].badges || [];
+    if (!currentBadges.includes("Super Host")) {
+      dbState.users[userIndex].badges = [...currentBadges, "Super Host"];
+    }
+  }
+
+  dbState.events.unshift(newEvent);
+  saveDB(dbState);
+  res.status(201).json({ message: "Event created successfully!", event: newEvent });
+});
+
+// Delete event logic
+app.delete("/api/events/:id", (req, res) => {
+  const index = dbState.events.findIndex(e => e.id === req.params.id);
+  if (index === -1) {
+    return res.status(404).json({ error: "Event not found" });
+  }
   
-  // GET all events
-  app.get('/api/events', (req, res) => {
-    const db = loadDatabase();
-    res.json(db.events);
-  });
+  dbState.events.splice(index, 1);
+  saveDB(dbState);
+  res.json({ message: "Event removed successfully." });
+});
 
-  // GET single event details
-  app.get('/api/events/:id', (req, res) => {
-    const db = loadDatabase();
-    const event = db.events.find(e => e.id === req.params.id);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-    res.json(event);
-  });
+// Live session operations: POST POLL
+app.post("/api/events/:eventId/polls", (req, res) => {
+  const { question, options } = req.body;
+  const event = dbState.events.find(e => e.id === req.params.eventId);
+  if (!event) return res.status(404).json({ error: "Event not found" });
 
-  // POST create a new event (Organiser Side)
-  app.post('/api/events', (req, res) => {
-    const db = loadDatabase();
-    const { 
-      name, date, time, venue, city, category, description, bannerImage,
-      tickets, discounts, faq, agenda, speakers 
-    } = req.body;
+  const newPoll: Poll = {
+    id: `poll_${Date.now()}`,
+    question,
+    options: options.map((opt: string, idx: number) => ({ id: `o_${idx}_${Date.now()}`, text: opt, votes: 0 }))
+  };
 
-    if (!name || !date || !time || !venue || !category || !description) {
-      return res.status(400).json({ error: 'Required fields missing' });
-    }
+  event.polls = event.polls || [];
+  event.polls.push(newPoll);
+  saveDB(dbState);
+  res.status(201).json(newPoll);
+});
 
-    const newEvent: Event = {
-      id: `evt-${Date.now()}`,
-      name,
-      date,
-      time,
-      venue,
-      city: city || 'Online',
-      category,
-      description,
-      bannerImage: bannerImage || 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
-      tickets: tickets || [
-        { id: `tkt-${Date.now()}-1`, name: 'General Entry', price: 0, capacity: 100, remainingCapacity: 100 }
-      ],
-      discounts: discounts || [],
-      faq: faq || [],
-      agenda: agenda || [],
-      speakers: speakers || [],
-      reviews: [],
-      polls: [],
-      chat: [
-        { id: `ct-${Date.now()}`, sender: 'System Manager', message: 'Chat active! Send your queries here.', timestamp: new Date().toISOString() }
-      ]
-    };
+// Live session operations: VOTE POLL
+app.post("/api/events/:eventId/polls/:pollId/vote", (req, res) => {
+  const { optionId } = req.body;
+  const event = dbState.events.find(e => e.id === req.params.eventId);
+  if (!event) return res.status(444).json({ error: "Event not found" });
 
-    db.events.push(newEvent);
-    saveDatabase(db);
-    res.status(201).json(newEvent);
-  });
+  const poll = event.polls?.find(p => p.id === req.params.pollId);
+  if (!poll) return res.status(404).json({ error: "Poll not found" });
 
-  // POST submit feedback rating to an event (Attendee review)
-  app.post('/api/events/:id/reviews', (req, res) => {
-    const db = loadDatabase();
-    const { userName, rating, text, linkedin } = req.body;
-    
-    if (!userName || !rating || !text) {
-      return res.status(400).json({ error: 'User name, rating, and review text are required.' });
-    }
-
-    const event = db.events.find(e => e.id === req.params.id);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found.' });
-    }
-
-    const newReview: Review = {
-      id: `rev-${Date.now()}`,
-      userName,
-      rating: Number(rating),
-      text,
-      date: new Date().toISOString().split('T')[0],
-      linkedin: linkedin || undefined
-    };
-
-    event.reviews.push(newReview);
-    saveDatabase(db);
-    res.status(201).json(newReview);
-  });
-
-  // ----------------------------------------------------
-  // EVENT POLLS (Live interaction)
-  // ----------------------------------------------------
-  
-  // GET polls for an event
-  app.get('/api/events/:id/polls', (req, res) => {
-    const db = loadDatabase();
-    const event = db.events.find(e => e.id === req.params.id);
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-    res.json(event.polls || []);
-  });
-
-  // POST create poll for an event
-  app.post('/api/events/:id/polls', (req, res) => {
-    const db = loadDatabase();
-    const { question, options } = req.body;
-    if (!question || !options || !Array.isArray(options)) {
-      return res.status(400).json({ error: 'Question and options array are required.' });
-    }
-
-    const event = db.events.find(e => e.id === req.params.id);
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-
-    if (!event.polls) event.polls = [];
-
-    const newPoll: Poll = {
-      id: `poll-${Date.now()}`,
-      question,
-      options: options.map((opt, idx) => ({ id: `opt-${Date.now()}-${idx}`, text: opt, votes: 0 })),
-      active: true
-    };
-
-    event.polls.push(newPoll);
-    saveDatabase(db);
-    res.status(201).json(newPoll);
-  });
-
-  // PATCH submit vote
-  app.patch('/api/events/:id/polls/:pollId/vote', (req, res) => {
-    const db = loadDatabase();
-    const { optionId } = req.body;
-    if (!optionId) return res.status(400).json({ error: 'Option id required' });
-
-    const event = db.events.find(e => e.id === req.params.id);
-    if (!event || !event.polls) return res.status(404).json({ error: 'Event or polls not found' });
-
-    const poll = event.polls.find(p => p.id === req.params.pollId);
-    if (!poll) return res.status(404).json({ error: 'Poll not found' });
-    if (!poll.active) return res.status(400).json({ error: 'Poll is closed' });
-
-    const option = poll.options.find(o => o.id === optionId);
-    if (!option) return res.status(404).json({ error: 'Option not found' });
-
+  const option = poll.options.find(o => o.id === optionId);
+  if (option) {
     option.votes += 1;
-    saveDatabase(db);
-    res.json(poll);
+    saveDB(dbState);
+    return res.json({ success: true, poll });
+  }
+
+  res.status(400).json({ error: "Option not found" });
+});
+
+// Live Q&A operations: ASK QUESTION
+app.post("/api/events/:eventId/qa", (req, res) => {
+  const { userId, userName, question } = req.body;
+  const event = dbState.events.find(e => e.id === req.params.eventId);
+  if (!event) return res.status(404).json({ error: "Event not found" });
+
+  const newQA: QAItem = {
+    id: `qa_${Date.now()}`,
+    userId,
+    userName,
+    question,
+    votes: 1,
+    answered: false
+  };
+
+  event.qa = event.qa || [];
+  event.qa.push(newQA);
+  saveDB(dbState);
+  res.status(201).json(newQA);
+});
+
+// Live Q&A: UPVOTE QUESTION
+app.post("/api/events/:eventId/qa/:qaId/vote", (req, res) => {
+  const event = dbState.events.find(e => e.id === req.params.eventId);
+  if (!event) return res.status(404).json({ error: "Event not found" });
+
+  const qaItem = event.qa?.find(q => q.id === req.params.qaId);
+  if (qaItem) {
+    qaItem.votes += 1;
+    saveDB(dbState);
+    return res.json({ success: true, qaItem });
+  }
+
+  res.status(400).json({ error: "Q&A item not found" });
+});
+
+// Live Q&A: MARK ANSWERED (Organizer)
+app.post("/api/events/:eventId/qa/:qaId/answer", (req, res) => {
+  const event = dbState.events.find(e => e.id === req.params.eventId);
+  if (!event) return res.status(404).json({ error: "Event not found" });
+
+  const qaItem = event.qa?.find(q => q.id === req.params.qaId);
+  if (qaItem) {
+    qaItem.answered = true;
+    saveDB(dbState);
+    return res.json({ success: true, qaItem });
+  }
+
+  res.status(400).json({ error: "Q&A item not found" });
+});
+
+// --- TICKETS AND BOOKING ENDPOINTS ---
+app.post("/api/bookings", (req, res) => {
+  const { userId, eventId, tickets, discountCode, totalAmount } = req.body;
+
+  const event = dbState.events.find(e => e.id === eventId);
+  if (!event) {
+    return res.status(404).json({ error: "Event not found" });
+  }
+
+  let totalTickets = 0;
+  tickets.forEach((t: any) => {
+    totalTickets += t.quantity;
   });
 
-  // PUT close/activate poll (toggle state)
-  app.put('/api/events/:id/polls/:pollId/toggle', (req, res) => {
-    const db = loadDatabase();
-    const event = db.events.find(e => e.id === req.params.id);
-    if (!event || !event.polls) return res.status(404).json({ error: 'Event or polls not found' });
+  if (event.registeredCount + totalTickets > event.capacity) {
+    return res.status(400).json({ error: "This booking exceeds the maximum remaining event seats." });
+  }
 
-    const poll = event.polls.find(p => p.id === req.params.pollId);
-    if (!poll) return res.status(404).json({ error: 'Poll not found' });
+  const bookingId = `b_${Date.now()}`;
+  const newBooking: Booking = {
+    id: bookingId,
+    userId,
+    eventId,
+    eventName: event.name,
+    eventDate: event.date,
+    eventVenue: event.venue,
+    tickets,
+    totalAmount: Number(totalAmount) || 0,
+    bookingDate: new Date().toISOString(),
+    status: "confirmed",
+    qrCode: `evt_id:${eventId}|booking_id:${bookingId}`,
+    checkedIn: false
+  };
 
-    poll.active = !poll.active;
-    saveDatabase(db);
-    res.json(poll);
-  });
+  // Adjust statistics & registers
+  event.registeredCount += totalTickets;
 
-  // ----------------------------------------------------
-  // EVENT CHAT (Live chat room)
-  // ----------------------------------------------------
-  
-  app.get('/api/events/:id/chat', (req, res) => {
-    const db = loadDatabase();
-    const event = db.events.find(e => e.id === req.params.id);
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-    res.json(event.chat || []);
-  });
-
-  app.post('/api/events/:id/chat', (req, res) => {
-    const db = loadDatabase();
-    const { sender, message } = req.body;
-    if (!sender || !message) return res.status(400).json({ error: 'Sender and message required.' });
-
-    const event = db.events.find(e => e.id === req.params.id);
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-
-    if (!event.chat) event.chat = [];
-
-    const newChatMsg = {
-      id: `chat-${Date.now()}`,
-      sender,
-      message,
-      timestamp: new Date().toISOString()
-    };
-
-    event.chat.push(newChatMsg);
-    saveDatabase(db);
-    res.status(201).json(newChatMsg);
-  });
-
-  // ----------------------------------------------------
-  // TICKET CHECKOUT & REGISTRATIONS
-  // ----------------------------------------------------
-  
-  // Organiser GET registrations
-  app.get('/api/registrations', (req, res) => {
-    const db = loadDatabase();
-    res.json(db.registrations);
-  });
-
-  // Single ticket validation lookup (used in check-in)
-  app.get('/api/registrations/:id', (req, res) => {
-    const db = loadDatabase();
-    const reg = db.registrations.find(r => r.id === req.params.id || r.qrCode === req.params.id);
-    if (!reg) return res.status(404).json({ error: 'Ticket registration not found' });
-    res.json(reg);
-  });
-
-  // POST Checkout tickets in sandbox payment
-  app.post('/api/registrations', (req, res) => {
-    const db = loadDatabase();
-    const { 
-      eventId, attendeeName, attendeeEmail, linkedinUrl,
-      ticketsPurchased, codeApplied, totalPaid 
-    } = req.body;
-
-    if (!eventId || !attendeeName || !attendeeEmail || !ticketsPurchased || !Array.isArray(ticketsPurchased)) {
-      return res.status(400).json({ error: 'Incomplete registration details' });
-    }
-
-    const event = db.events.find(e => e.id === eventId);
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-
-    // Validate capacities and update them
-    for (const item of ticketsPurchased) {
-      const ticketType = event.tickets.find(t => t.name === item.ticketTypeName);
-      if (!ticketType) {
-        return res.status(400).json({ error: `Ticket type ${item.ticketTypeName} not found` });
-      }
-      if (ticketType.price !== 0 && ticketType.remainingCapacity < item.quantity) {
-        return res.status(400).json({ error: `Not enough tickets remaining for ${item.ticketTypeName}` });
-      }
-    }
-
-    // Deduct ticket capacities
-    for (const item of ticketsPurchased) {
-      const ticketType = event.tickets.find(t => t.name === item.ticketTypeName);
-      if (ticketType) {
-        ticketType.remainingCapacity = Math.max(0, ticketType.remainingCapacity - item.quantity);
-      }
-    }
-
-    const regId = `reg-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    const newReg: Registration = {
-      id: regId,
-      eventId,
-      eventName: event.name,
-      eventDate: event.date,
-      eventTime: event.time,
-      eventVenue: event.venue,
-      attendeeName,
-      attendeeEmail,
-      linkedinUrl: linkedinUrl || undefined,
-      ticketsPurchased,
-      totalAmount: totalPaid,
-      discountApplied: codeApplied || undefined,
-      qrCode: `EVTSPHERE-${regId}-${eventId}`,
-      checkedIn: false,
-      createdAt: new Date().toISOString()
-    };
-
-    // Save registration
-    db.registrations.unshift(newReg);
+  // Award gamified points for booking
+  const userIdx = dbState.users.findIndex(u => u.id === userId);
+  if (userIdx !== -1) {
+    const currentPoints = dbState.users[userIdx].points || 0;
+    dbState.users[userIdx].points = currentPoints + 150;
     
-    // Update Organizer payout/revenue
-    db.payouts.totalRevenue += totalPaid;
-    db.payouts.currentBalance += totalPaid;
-
-    // Award attendee profile badge if they bought multiple or high-value tickets
-    const matchedUser = db.users?.find(u => u.email.toLowerCase() === attendeeEmail.toLowerCase());
-    if (matchedUser) {
-      if (!matchedUser.attendedEventIds.includes(eventId)) {
-        matchedUser.attendedEventIds.push(eventId);
-      }
-      if (totalPaid > 200) {
-        const hasVipBadge = matchedUser.badges.some(b => b.name === 'VIP Connoisseur');
-        if (!hasVipBadge) {
-          matchedUser.badges.push({
-            name: 'VIP Connoisseur',
-            description: 'Acquired premium VIP-level experiences for high-value summits.',
-            icon: 'Crown',
-            awardedAt: new Date().toISOString()
-          });
-        }
-      }
+    const badges = dbState.users[userIdx].badges || [];
+    if (!badges.includes("Loyal Fan") && dbState.bookings.filter(b => b.userId === userId).length >= 2) {
+      dbState.users[userIdx].badges = [...badges, "Loyal Fan"];
     }
+  }
 
-    saveDatabase(db);
-    res.status(201).json(newReg);
-  });
+  dbState.bookings.push(newBooking);
+  saveDB(dbState);
+  res.status(201).json({ message: "Booking confirmed!", booking: newBooking });
+});
 
-  // POST Submit Refund Request (from attendee dashboard)
-  app.post('/api/registrations/:id/refund', (req, res) => {
-    const db = loadDatabase();
-    const { action } = req.body; // 'request', 'approve', 'reject'
-    
-    const regIndex = db.registrations.findIndex(r => r.id === req.params.id);
-    if (regIndex === -1) return res.status(404).json({ error: 'Registration not found' });
-    const reg = db.registrations[regIndex];
+app.get("/api/bookings", (req, res) => {
+  const userId = req.query.userId as string;
+  if (userId) {
+    const userBookings = dbState.bookings.filter(b => b.userId === userId);
+    return res.json(userBookings);
+  }
+  res.json(dbState.bookings);
+});
 
-    if (action === 'request') {
-      reg.refundRequested = true;
-      reg.refundStatus = 'Pending';
-    } else if (action === 'approve') {
-      if (!reg.refundRequested) return res.status(400).json({ error: 'No refund requested.' });
-      reg.refundStatus = 'Approved';
-      // Deduct payout values
-      db.payouts.totalRevenue = Math.max(0, db.payouts.totalRevenue - reg.totalAmount);
-      db.payouts.currentBalance = Math.max(0, db.payouts.currentBalance - reg.totalAmount);
-      
-      // Restock capacity in the event
-      const event = db.events.find(e => e.id === reg.eventId);
-      if (event) {
-        for (const item of reg.ticketsPurchased) {
-          const tType = event.tickets.find(t => t.name === item.ticketTypeName);
-          if (tType) {
-            tType.remainingCapacity = Math.min(tType.capacity, tType.remainingCapacity + item.quantity);
-          }
-        }
-      }
-    } else if (action === 'reject') {
-      if (!reg.refundRequested) return res.status(400).json({ error: 'No refund requested.' });
-      reg.refundStatus = 'Rejected';
-    } else {
-      return res.status(400).json({ error: 'Invalid refund action.' });
-    }
+app.post("/api/bookings/:id/refund", (req, res) => {
+  const booking = dbState.bookings.find(b => b.id === req.params.id);
+  if (!booking) return res.status(404).json({ error: "Booking not found." });
 
-    saveDatabase(db);
-    res.json(reg);
-  });
+  booking.status = "refund_requested";
+  saveDB(dbState);
+  res.json({ message: "Refund requested successfully. Subject to organizer approval.", booking });
+});
 
-  // POST manually run attendee Checkin (simulate tickets scan entry system)
-  app.post('/api/registrations/:id/checkin', (req, res) => {
-    const db = loadDatabase();
-    const reg = db.registrations.find(r => r.id === req.params.id || r.qrCode === req.params.id);
-    if (!reg) return res.status(404).json({ error: 'Ticket registration not found' });
+app.post("/api/bookings/:id/approve-refund", (req, res) => {
+  const booking = dbState.bookings.find(b => b.id === req.params.id);
+  if (!booking) return res.status(404).json({ error: "Booking not found." });
 
-    if (reg.checkedIn) {
-      return res.status(400).json({ error: 'Attendee is already checked in.' });
-    }
+  booking.status = "refunded";
 
-    reg.checkedIn = true;
-    reg.checkedInAt = new Date().toISOString();
+  // Re-adjust seating
+  const event = dbState.events.find(e => e.id === booking.eventId);
+  if (event) {
+    const totalTickets = booking.tickets.reduce((sum, t) => sum + t.quantity, 0);
+    event.registeredCount = Math.max(0, event.registeredCount - totalTickets);
+  }
 
-    // Award standard badge on first checkin
-    const matchedUser = db.users?.find(u => u.email.toLowerCase() === reg.attendeeEmail.toLowerCase());
-    if (matchedUser) {
-      const hasBadge = matchedUser.badges.some(b => b.name === 'Showstopper');
-      if (!hasBadge) {
-        matchedUser.badges.push({
-          name: 'Showstopper',
-          description: 'Checked into an live event gate successfully.',
-          icon: 'CheckCircle',
-          awardedAt: new Date().toISOString()
-        });
-      }
-      reg.badgeEarned = 'Showstopper';
-    }
+  saveDB(dbState);
+  res.json({ message: "Refund request approved & seats released.", booking });
+});
 
-    saveDatabase(db);
-    res.json({ success: true, registration: reg });
-  });
+// Manual / QR simulation checkin
+app.post("/api/bookings/:id/checkin", (req, res) => {
+  const booking = dbState.bookings.find(b => b.id === req.params.id);
+  if (!booking) return res.status(404).json({ error: "Booking not found." });
 
-  // ----------------------------------------------------
-  // ORGANISER PAYOUT SIMULATOR
-  // ----------------------------------------------------
+  if (booking.checkedIn) {
+    return res.status(400).json({ error: "Ticket has already been verified and checked-in!" });
+  }
+
+  booking.checkedIn = true;
   
-  app.get('/api/payouts', (req, res) => {
-    const db = loadDatabase();
-    res.json(db.payouts);
-  });
-
-  app.post('/api/payouts', (req, res) => {
-    const db = loadDatabase();
-    const { amount, bankAccount } = req.body;
-    if (!amount || amount <= 0 || !bankAccount) {
-      return res.status(400).json({ error: 'Valid payout amount and destination bank account are required.' });
+  const event = dbState.events.find(e => e.id === booking.eventId);
+  if (event) {
+    event.liveAttendeeCount = (event.liveAttendeeCount || 0) + booking.tickets.reduce((sum, t) => sum + t.quantity, 0);
+    event.checkIns = event.checkIns || [];
+    if (!event.checkIns.includes(booking.userId)) {
+      event.checkIns.push(booking.userId);
     }
+  }
 
-    if (amount > db.payouts.currentBalance) {
-      return res.status(400).json({ error: 'Insufficient current balance for payout request.' });
+  // Award gamified points for checkin
+  const userIdx = dbState.users.findIndex(u => u.id === booking.userId);
+  if (userIdx !== -1) {
+    const currentPoints = dbState.users[userIdx].points || 0;
+    dbState.users[userIdx].points = currentPoints + 200; // Attendee rewards
+    const badges = dbState.users[userIdx].badges || [];
+    if (!badges.includes("Seminar Star")) {
+      dbState.users[userIdx].badges = [...badges, "Seminar Star"];
     }
+  }
 
-    db.payouts.currentBalance -= amount;
-    db.payouts.payoutsCompleted += amount;
-    
-    const newPayout = {
-      id: `pay-${Date.now()}`,
-      amount,
-      status: 'Completed' as const,
-      date: new Date().toISOString().split('T')[0],
-      bankAccount
-    };
+  saveDB(dbState);
+  res.json({ message: "Check-in successful! Points awarded.", booking });
+});
 
-    db.payouts.payoutsList.push(newPayout);
-    saveDatabase(db);
-    res.status(201).json(db.payouts);
-  });
+// --- FEEDBACKS AND REVIEWS WITH SENTIMENT ANALYSIS ---
+app.post("/api/events/:eventId/reviews", async (req, res) => {
+  const { userId, userName, rating, comment } = req.body;
+  if (!userId || !userName || !rating || !comment) {
+    return res.status(400).json({ error: "Missing required content for review." });
+  }
 
-  // ----------------------------------------------------
-  // AUTHENTICATION (SIGN UP & SIGN IN)
-  // ----------------------------------------------------
+  const event = dbState.events.find(e => e.id === req.params.eventId);
+  if (!event) return res.status(404).json({ error: "Event not found" });
 
-  app.post('/api/auth/signup', (req, res) => {
-    const db = loadDatabase();
-    const { email, name, password, linkedinUrl, savedCategories } = req.body;
-
-    if (!email || !name || !password) {
-      return res.status(400).json({ error: 'Email, name, and password are required' });
-    }
-
-    if (!db.users) db.users = [];
-    const exists = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (exists) {
-      return res.status(400).json({ error: 'Email is already registered' });
-    }
-
-    const newUser: UserRecord = {
-      email: email.trim(),
-      name: name.trim(),
-      passwordHash: password, // plaintext simulation or hash is absolutely perfect for standard sandboxed builds
-      linkedinUrl: linkedinUrl || '',
-      savedCategories: savedCategories || [],
-      wishlistedEvents: [],
-      attendedEventIds: [],
-      badges: [
-        {
-          name: 'Event Pioneer',
-          description: 'Signed up as an early adopter of EventSphere.',
-          icon: 'Award',
-          awardedAt: new Date().toISOString()
-        }
-      ]
-    };
-
-    db.users.push(newUser);
-    saveDatabase(db);
-
-    res.status(201).json({
-      user: {
-        email: newUser.email,
-        name: newUser.name,
-        linkedinUrl: newUser.linkedinUrl,
-        savedCategories: newUser.savedCategories,
-        wishlistedEvents: newUser.wishlistedEvents,
-        attendedEventIds: newUser.attendedEventIds,
-        badges: newUser.badges
-      },
-      token: newUser.email
-    });
-  });
-
-  app.post('/api/auth/login', (req, res) => {
-    const db = loadDatabase();
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
-    }
-
-    if (!db.users) db.users = [];
-    const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (!user || user.passwordHash !== password) {
-      return res.status(401).json({ error: 'Invalid email or password' });
-    }
-
-    res.json({
-      user: {
-        email: user.email,
-        name: user.name,
-        linkedinUrl: user.linkedinUrl,
-        savedCategories: user.savedCategories,
-        wishlistedEvents: user.wishlistedEvents,
-        attendedEventIds: user.attendedEventIds,
-        badges: user.badges
-      },
-      token: user.email
-    });
-  });
-
-  // ----------------------------------------------------
-  // PROFILE & WISHLIST
-  // ----------------------------------------------------
+  let sentiment = "Neutral";
   
-  app.get('/api/profiles', (req, res) => {
-    const user = getCurrentUser(req);
-    if (!user) {
-      return res.status(401).json({ error: 'Authorization required to fetch user profile.' });
-    }
-    res.json({
-      email: user.email,
-      name: user.name,
-      linkedinUrl: user.linkedinUrl,
-      savedCategories: user.savedCategories,
-      wishlistedEvents: user.wishlistedEvents,
-      attendedEventIds: user.attendedEventIds,
-      badges: user.badges
-    });
-  });
-
-  app.post('/api/profiles', (req, res) => {
-    const db = loadDatabase();
-    const user = db.users?.find(u => u.email.toLowerCase() === getCurrentUser(req)?.email.toLowerCase());
-    if (!user) {
-      return res.status(401).json({ error: 'Authorization required to modify profile.' });
-    }
-    const { name, linkedinUrl, savedCategories, wishlistedEvents } = req.body;
-
-    if (name !== undefined) user.name = name;
-    if (linkedinUrl !== undefined) user.linkedinUrl = linkedinUrl;
-    if (savedCategories !== undefined) user.savedCategories = savedCategories;
-    if (wishlistedEvents !== undefined) user.wishlistedEvents = wishlistedEvents;
-
-    saveDatabase(db);
-    res.json({
-      email: user.email,
-      name: user.name,
-      linkedinUrl: user.linkedinUrl,
-      savedCategories: user.savedCategories,
-      wishlistedEvents: user.wishlistedEvents,
-      attendedEventIds: user.attendedEventIds,
-      badges: user.badges
-    });
-  });
-
-  // ----------------------------------------------------
-  // SERVER-SIDE GEMINI AI ENDPOINTS
-  // ----------------------------------------------------
-
-  // 1. AI-generated Event Description
-  app.post('/api/ai/description', async (req, res) => {
-    const { bulletPoints, category, eventName } = req.body;
-    if (!bulletPoints || bulletPoints.length === 0) {
-      return res.status(400).json({ error: 'Bullet points are required to draft a description' });
-    }
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      // Robust offline fallback with incredible craft
-      const bulletsStr = Array.isArray(bulletPoints) ? bulletPoints.join(', ') : bulletPoints;
-      const offlineDesc = `Welcome to ${eventName || 'our upcoming event'}! Curated under the ${category || 'General'} track, this event is designed to inspire and connect. During this session, you will get key insights into: ${bulletsStr}. Join us for networking, structured workshops, and speaker Q&A sessions. Reserve your spot today!`;
-      return res.json({ description: offlineDesc, isFallback: true });
-    }
-
+  if (ai) {
+    // Run real Gemini Sentiment Analysis on the feedback
     try {
-      const prompt = `You are a professional copywriter. Write a highly persuasive, polished, of about 80-120 words event description for an event named "${eventName || 'New Horizons'}" under the "${category || 'General'}" category. Build it using these core highlights or bullet points:\n${bulletPoints.toString()}\nMake the copy engaging, clean, and optimized for attendee sign-ups. Do not return markdown headers or formatting wrap, just the text content output.`;
-      
       const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents: prompt
-      });
-
-      const responseText = response.text || '';
-      res.json({ description: responseText.trim(), isFallback: false });
-    } catch (err: any) {
-      console.error('Gemini call failed, failing back.', err);
-      res.status(500).json({ error: err.message || 'Gemini error' });
-    }
-  });
-
-  // 2. Smart Schedule/Agenda Suggester (based on speakers role and optimal ordering flow)
-  app.post('/api/ai/schedule', async (req, res) => {
-    const { sessions, speakers, durationMinutes } = req.body;
-    if (!sessions || !Array.isArray(sessions)) {
-      return res.status(400).json({ error: 'Sessions array required' });
-    }
-
-    const ai = getGeminiClient();
-    const offlineFallbackSchedule = sessions.map((session, idx) => {
-      // Simple automated smart flow: sort keynotes first, then panel discussions, then Q&A
-      const timeInMin = 9 * 60 + idx * 90; // starts 9:00, 90 mins slot
-      const hrRef = Math.floor(timeInMin / 60);
-      const minRef = timeInMin % 60;
-      const formattedTime = `${String(hrRef).padStart(2, '0')}:${String(minRef).padStart(2, '0')} - ${String(hrRef + 1).padStart(2, '0')}:${String(minRef + 30).padStart(2, '0')}`;
-      return {
-        ...session,
-        time: formattedTime,
-        aiOptimizationNote: 'Session ordered logically according to chronological relevance and speaker availability.'
-      };
-    });
-
-    if (!ai) {
-      return res.json({ agenda: offlineFallbackSchedule, isFallback: true });
-    }
-
-    try {
-      const prompt = `You are an event planner expert. Suggest an optimal schedule ordering and timing breakdown for these planned sessions:\n${JSON.stringify(sessions)}\nOur speaker details are:\n${JSON.stringify(speakers)}\nThe event begins at 09:00 AM. Allocate realistic standard time gaps like 15-30 mins lunch or tea breaks. Suggest the feedback response strictly as a JSON array of objects fitting standard AgendaSession format (id, time, title, description, speaker) plus a custom "reason" field describing why this order was selected. Return ONLY valid JSON array block, do not include any Markdown tags or comments in response.`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents: prompt,
+        model: "gemini-3.5-flash",
+        contents: `Analyze the sentiment of this event review. Classify it strictly as one of: "Positive", "Neutral", "Negative". Promptly explain in 5-10 words. Review: "${comment}"`,
         config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                time: { type: Type.STRING, description: 'e.g. 09:00 - 10:15' },
-                title: { type: Type.STRING },
-                description: { type: Type.STRING },
-                speaker: { type: Type.STRING },
-                reason: { type: Type.STRING, description: 'Why this ordering is optimal.' }
-              },
-              required: ['id', 'time', 'title', 'speaker']
-            }
-          }
+          temperature: 0.1,
         }
       });
-
-      const responseText = response.text || '';
-      const parsed = JSON.parse(responseText.trim());
-      res.json({ agenda: parsed, isFallback: false });
+      const aiText = response.text || "";
+      if (aiText.toLowerCase().includes("positive")) {
+        sentiment = "Positive";
+      } else if (aiText.toLowerCase().includes("negative")) {
+        sentiment = "Negative";
+      }
     } catch (err) {
-      console.error('Gemini schedule builder failed', err);
-      res.json({ agenda: offlineFallbackSchedule, isFallback: true });
+      console.error("Gemini sentiment analysis failed, falling back.", err);
     }
+  } else {
+    // Simple mock classification to ensure offline behaves nicely
+    const posIndicators = ["good", "great", "excellent", "awesome", "perfect", "marvelous", "love", "best"];
+    const negIndicators = ["bad", "poor", "worst", "unhappy", "waste", "disappointed", "slow", "loud"];
+    const textLower = comment.toLowerCase();
+    if (posIndicators.some(w => textLower.includes(w))) sentiment = "Positive";
+    else if (negIndicators.some(w => textLower.includes(w))) sentiment = "Negative";
+  }
+
+  const newReview: Review = {
+    id: `rev_${Date.now()}`,
+    userId,
+    userName,
+    rating: Number(rating),
+    comment,
+    sentiment,
+    date: new Date().toISOString()
+  };
+
+  // Give attendee points for leaving feedback
+  const userIdx = dbState.users.findIndex(u => u.id === userId);
+  if (userIdx !== -1) {
+    const currentPoints = dbState.users[userIdx].points || 0;
+    dbState.users[userIdx].points = currentPoints + 50;
+  }
+
+  event.reviews = event.reviews || [];
+  event.reviews.push(newReview);
+  saveDB(dbState);
+  res.status(201).json({ message: "Review posted!", review: newReview });
+});
+
+// --- ORGANIZER STATISTICS & PAYOUTS ---
+app.get("/api/organizer/stats", (req, res) => {
+  const orgId = req.query.organizerId as string;
+  if (!orgId) return res.status(400).json({ error: "Organizer id is required." });
+
+  const orgEvents = dbState.events.filter(e => e.organizerId === orgId);
+  
+  let totalRevenue = 0;
+  let totalRegistrations = 0;
+  let totalCheckins = 0;
+  
+  orgEvents.forEach(evt => {
+    totalRegistrations += evt.registeredCount || 0;
+    totalCheckins += evt.checkIns?.length || 0;
+    
+    // Find all bookings for this event to calculate revenue safely
+    const eventBookings = dbState.bookings.filter(b => b.eventId === evt.id && b.status !== 'refunded');
+    eventBookings.forEach(book => {
+      totalRevenue += book.totalAmount || 0;
+    });
   });
 
-  // 3. AI Event Recommendations
-  app.post('/api/ai/recommendations', async (req, res) => {
-    const { userProfile, availableEvents } = req.body;
-    if (!availableEvents || !Array.isArray(availableEvents)) {
-      return res.status(400).json({ error: 'Available events array required' });
-    }
+  res.json({
+    revenue: totalRevenue,
+    registrations: totalRegistrations,
+    checkins: totalCheckins,
+    eventsCount: orgEvents.length,
+    payoutSimulate: totalRevenue * 0.95 // 5% fee
+  });
+});
 
-    // Offline logic
-    const savedCats = userProfile?.savedCategories || [];
-    const recommendedList = availableEvents.map(e => {
-      // Assign simple rating score based on category match
-      const catMatch = savedCats.includes(e.category);
-      const score = catMatch ? 90 : 30;
-      return {
-        eventId: e.id,
-        score,
-        reason: catMatch 
-          ? `Matches your favorite saved category: "${e.category}"`
-          : `Explore new areas! Located at ${e.city || e.venue}.`
-      };
-    }).sort((a, b) => b.score - a.score);
+// --- AI INTELLIGENT ROUTINGS ---
 
-    const ai = getGeminiClient();
-    if (!ai) {
-      return res.json({ recommendations: recommendedList, isFallback: true });
-    }
+// Generate descriptions from bullet points
+app.post("/api/ai/generate-description", async (req, res) => {
+  const { bullets, title } = req.body;
+  if (!bullets) return res.status(400).json({ error: "Bullets list is required." });
 
+  if (ai) {
     try {
-      const prompt = `You are an AI personalization adviser. Recommend events to user based on profile:\nProfile details: ${JSON.stringify(userProfile)}\nList of available events: ${JSON.stringify(availableEvents.map(e => ({ id: e.id, name: e.name, category: e.category, description: e.description, city: e.city })))}.\nGenerate recommendations as a JSON array where each item has "eventId", "score" (number from 0 to 100), and a customized high-quality conversational "reason" (e.g. \"As a Tech enthusiast, Dr. Carter's speech on Agent structures matches your interests\"). Return only raw JSON, no markdown formatting.`;
-
       const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
+        model: "gemini-3.5-flash",
+        contents: `Given the event title "${title || "EventSphere special event"}" and these quick bullet points:\n${bullets}\n\nGenerate an outstanding, highly engaging, and professionally polished event invitation marketing description. Use standard, engaging paragraphs and avoid technical system metadata. Keep it under 150 words.`,
+      });
+      return res.json({ description: response.text });
+    } catch (err: any) {
+      console.error("Gemini description generation failed:", err);
+      return res.status(500).json({ error: err.message || "Desc failure" });
+    }
+  }
+
+  // Simulation Fallback
+  const fallback = `Welcome to our stellar event "${title || "EventSphere special event"}". Handcrafted to explore cutting-edge solutions, this event coordinates hands-on labs and deep networking opportunities. Highlight points: ${bullets}. Don't miss this opportunity to connect with pioneers in the ecosystem and accelerate your scaling goals.`;
+  res.json({ description: fallback });
+});
+
+// Suggest multi-session smart schedule agenda
+app.post("/api/ai/generate-schedule", async (req, res) => {
+  const { title, category, description } = req.body;
+
+  if (ai) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: `Create a professional 3-session timeline schedule with precise hours, engaging session titles and speaker profiles matching an event named "${title}" of category "${category}". Description Context: "${description}". Format beautifully.`,
+      });
+      return res.json({ schedule: response.text });
+    } catch (err) {
+      console.error("Gemini schedule matching failed:", err);
+    }
+  }
+
+  const fallback = `Suggested Schedule:\n- 10:00 AM - 11:30 AM: Kickoff Keynote & Ecosystem Trends\n- 11:45 AM - 01:15 PM: Expert Panel & Live Sandbox Interactive Session\n- 02:30 PM - 04:00 PM: Founders Roundtables & VIP Payout Ceremony`;
+  res.json({ schedule: fallback });
+});
+
+// Recommend events based on attendee interests and past history
+app.post("/api/ai/recommend", async (req, res) => {
+  const { interests, attendedCategories } = req.body;
+  const events = dbState.events;
+
+  if (ai) {
+    try {
+      const prompt = `Recommend from the following structured events list the best matches for an attendee who has listed interests: ${JSON.stringify(interests)} and has historical category interest: ${JSON.stringify(attendedCategories)}.
+      Available Events JSON list: ${JSON.stringify(events.map(e => ({ id: e.id, name: e.name, category: e.category, description: e.description })))}.
+      Give your recommendation list in simple JSON array format, explaining why each is recommended. Format matches: [{"eventId": "evt_1", "reason": "Recommended because..."}]`;
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: {
-          responseMimeType: 'application/json',
+          responseMimeType: "application/json",
           responseSchema: {
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
               properties: {
                 eventId: { type: Type.STRING },
-                score: { type: Type.INTEGER },
                 reason: { type: Type.STRING }
               },
-              required: ['eventId', 'score', 'reason']
+              required: ["eventId", "reason"]
             }
           }
         }
       });
-
-      const responseText = response.text || '';
-      const parsed = JSON.parse(responseText.trim());
-      res.json({ recommendations: parsed, isFallback: false });
-    } catch (err) {
-      console.error('Gemini recommendation failed', err);
-      res.json({ recommendations: recommendedList, isFallback: true });
-    }
-  });
-
-  // 4. AI Crowd Prediction (Innovative Feature)
-  app.post('/api/ai/crowd-prediction', async (req, res) => {
-    const { event, registrationCount } = req.body;
-    if (!event) return res.status(400).json({ error: 'Event object required' });
-
-    const totalCapacity = event.tickets.reduce((acc: number, t: any) => acc + (t.capacity || 0), 0);
-    const ticketsSold = totalCapacity - event.tickets.reduce((acc: number, t: any) => acc + (t.remainingCapacity || 0), 0);
-    const ticketsRemaining = totalCapacity - ticketsSold;
-    
-    // Offline predictive calculator: computes registration rates, categorical conversion, time weights
-    const factorCategory = event.category === 'Tech' ? 1.15 : event.category === 'Music' ? 1.05 : 0.95;
-    const daysRemaining = Math.max(1, Math.round((new Date(event.date).getTime() - Date.now()) / (1000 * 3600 * 24)));
-    const velocity = ticketsSold / Math.max(1, (30 / daysRemaining)); // registrations rate velocity
-    
-    const basePrediction = Math.min(totalCapacity, Math.round(ticketsSold + (velocity * Math.min(daysRemaining, 10)) * factorCategory));
-    const confidenceRating = ticketsSold > (totalCapacity * 0.5) ? 'High' : daysRemaining < 7 ? 'Medium' : 'Low';
-    
-    const offlinePrediction = {
-      predictedAttendeeCount: basePrediction,
-      selloutConfidence: confidenceRating,
-      expectedTurnoutPercent: Math.round((basePrediction / Math.max(1, totalCapacity)) * 100),
-      crowdSizeDescriptor: basePrediction > 400 ? 'Dense Crowd Throngs' : basePrediction > 100 ? 'Moderate Buzz' : 'Intimate Salon Gathering',
-      insights: [
-        `Category performance factor of +${Math.round((factorCategory - 1) * 100)}% analyzed based on category: ${event.category || 'General'}.`,
-        `Current checkout conversion velocity is ${velocity.toFixed(1)} sales requests per segment.`,
-        daysRemaining > 0 ? `${daysRemaining} ticket sales days remaining before event launch.` : 'Event starts shortly.'
-      ]
-    };
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      return res.json({ prediction: offlinePrediction, isFallback: true });
-    }
-
-    try {
-      const prompt = `Analyze event attendance and forecast crowd density:\nEvent Details: ${JSON.stringify(event)}\nCapacity: ${totalCapacity}\nTickets Sold: ${ticketsSold}\nDays till Event: ${daysRemaining}\nCalculate crowd expectation. Return JSON following this schema: { predictedAttendeeCount: number, selloutConfidence: "Low" | "Medium" | "High", expectedTurnoutPercent: number, crowdSizeDescriptor: string, insights: string[] }`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              predictedAttendeeCount: { type: Type.INTEGER },
-              selloutConfidence: { type: Type.STRING },
-              expectedTurnoutPercent: { type: Type.INTEGER },
-              crowdSizeDescriptor: { type: Type.STRING },
-              insights: { type: Type.ARRAY, items: { type: Type.STRING } }
-            },
-            required: ['predictedAttendeeCount', 'selloutConfidence', 'expectedTurnoutPercent', 'crowdSizeDescriptor', 'insights']
-          }
-        }
-      });
-
-      const responseText = response.text || '';
-      const parsed = JSON.parse(responseText.trim());
-      res.json({ prediction: parsed, isFallback: false });
-    } catch (err) {
-      console.error('Gemini crowd prediction failed', err);
-      res.json({ prediction: offlinePrediction, isFallback: true });
-    }
-  });
-
-  // 5. Smart Networking Match (Innovative Feature)
-  app.post('/api/ai/networking-match', async (req, res) => {
-    const { userBio, linkedinUrl, eventCategory, attendeeProfiles } = req.body;
-    if (!attendeeProfiles || !Array.isArray(attendeeProfiles)) {
-      return res.status(400).json({ error: 'Attendee matches roster required' });
-    }
-
-    // Filter profiles who opt in
-    const optedIn = attendeeProfiles.filter(p => !!p.linkedinUrl || p.email !== req.body.currentUserEmail);
-    const offlineMatches = optedIn.map((profile, i) => {
-      const score = Math.round(75 + (i * 4) % 21); // 75 - 96%
-      const skills = eventCategory === 'Tech' 
-        ? ['Distributed Systems', 'Generative API Strategy', 'Interface UX Styling']
-        : eventCategory === 'Music'
-          ? ['Audio Synthesis', 'Ableton DAW Curation', 'Creative Lighting']
-          : ['Business Development', 'Event Choreography'];
-      return {
-        name: profile.attendeeName,
-        linkedinUrl: profile.linkedinUrl || 'https://linkedin.com/demo-linkedin-hub',
-        matchPercent: score,
-        sharedAIGround: `Interested in common ${eventCategory} tracks. Perfect match for networking during coffee break!`,
-        suggestedKickers: `Ask them about: "${skills[i % skills.length]}"`
-      };
-    });
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      return res.json({ matches: offlineMatches.slice(0, 3), isFallback: true });
-    }
-
-    try {
-      const prompt = `You are a professional networking AI agent at a conference. Match the active user (Bio: "${userBio || 'Senior Engineer interested in scaling modern web frontends'}") with other registered attendees of this "${eventCategory}" event:\n${JSON.stringify(optedIn)}\nRecommend the top 3 best fits with high-precision matchPercent (e.g. 94), sharedAIGround reasoning, and suggestedConversationKickers keywords advice. Respond ONLY with a valid JSON array of objects conforming to the matching structure.`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                linkedinUrl: { type: Type.STRING },
-                matchPercent: { type: Type.INTEGER },
-                sharedAIGround: { type: Type.STRING },
-                suggestedKickers: { type: Type.STRING }
-              },
-              required: ['name', 'linkedinUrl', 'matchPercent', 'sharedAIGround', 'suggestedKickers']
-            }
-          }
-        }
-      });
-
-      const responseText = response.text || '';
-      const parsed = JSON.parse(responseText.trim());
-      res.json({ matches: parsed, isFallback: false });
-    } catch (err) {
-      console.error('Gemini networking match failed', err);
-      res.json({ matches: offlineMatches.slice(0, 3), isFallback: true });
-    }
-  });
-
-  // 6. AI Banner Poster Generator
-  app.post('/api/ai/generate-banner', async (req, res) => {
-    const { prompt, title, category } = req.body;
-    
-    const colors = [
-      'linear-gradient(135deg, #1e1b4b 0%, #311042 100%)',
-      'linear-gradient(135deg, #022c22 0%, #064e3b 100%)',
-      'linear-gradient(135deg, #1c1917 0%, #44403c 100%)',
-      'linear-gradient(135deg, #1e293b 0%, #475569 100%)',
-      'linear-gradient(135deg, #300045 0%, #ff007f 100%)'
-    ];
-    // Dynamic styled gradient poster selection in case of no key
-    const hashedIndex = (prompt?.length || 0) % colors.length;
-    const selectedFallbackGradient = colors[hashedIndex];
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      return res.json({ bannerUrl: selectedFallbackGradient, isFallback: true });
-    }
-
-    try {
-      // Call Gemini 2.5 Flash Image to generate dynamic base64 visual
-      const contentsText = `A high quality sleek background poster image for an event titled: "${title || 'Unite'}". Dynamic visual representation of style category "${category || 'Tech'}". Vibes: "${prompt || 'modern, atmospheric, stylish, highly professional'}". Avoid text on output image.`;
       
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image', // Default recommended image model!
-        contents: {
-          parts: [{ text: contentsText }]
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: '16:9',
-            imageSize: '1K'
-          }
-        }
-      });
-
-      let base64ImageUrl = '';
-      const parts = response.candidates?.[0]?.content?.parts;
-      if (parts) {
-        for (const part of parts) {
-          if (part.inlineData) {
-            base64ImageUrl = `data:image/png;base64,${part.inlineData.data}`;
-            break;
-          }
-        }
-      }
-
-      if (base64ImageUrl) {
-        res.json({ bannerUrl: base64ImageUrl, isFallback: false });
-      } else {
-        res.json({ bannerUrl: selectedFallbackGradient, isFallback: true });
-      }
-    } catch (err: any) {
-      console.error('Gemini image generation failed', err);
-      res.json({ bannerUrl: selectedFallbackGradient, isFallback: true });
+      return res.send(response.text);
+    } catch (e) {
+      console.error("Gemini recommendation system error:", e);
     }
-  });
-
-  // ----------------------------------------------------
-  // VITE APP MIDDLEWARE / STATIC ASSETS
-  // ----------------------------------------------------
-  
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req: express.Request, res: express.Response) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`EventSphere Express Server booted at http://0.0.0.0:${PORT}`);
+  // Dumb matching fallback
+  const list = interests || ["Tech & AI"];
+  const matches = events.map(e => {
+    const matched = list.some((interest: string) => e.category.toLowerCase().includes(interest.toLowerCase()) || e.name.toLowerCase().includes(interest.toLowerCase()));
+    return {
+      eventId: e.id,
+      reason: matched ? `Recommended because you have high interests in ${e.category}.` : "Recommended as a featured global highlight event."
+    };
+  });
+  res.json(matches);
+});
+
+// AI Chatbot agent support
+app.post("/api/ai/chatbot", async (req, res) => {
+  const { message, history, context } = req.body;
+
+  let prompt = `You are "SphereBot", the resident helpful smart guide for EventSphere. You support both creators and attendees with navigation, troubleshooting, ticketing issues, refunds, and event details.
+
+  System context regarding existing platform events: ${JSON.stringify(dbState.events.map(e => ({ name: e.name, date: e.date, venue: e.venue, category: e.category, tickets: e.ticketTypes })))}.
+  Also, explain standard details to users: Refund requests go to organizers, tickets are QR-based and verified instantly at the gates, attending gains people points (150 for buying, 200 for checking-in, 50 for leaving reviews).
+
+  User inquiry: "${message}"`;
+
+  if (ai) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt
+      });
+      return res.json({ reply: response.text });
+    } catch (err) {
+      console.error("Gemini Chat bot error:", err);
+    }
+  }
+
+  // Simulation response fallback
+  let reply = "Hello! I am SphereBot, your AI Assistant. Currently performing local lookups. You can ask me anything about the event, ticketing policies, or points. Refund requests are submitted directly under your tickets panel in real-time, and you score 200 extra points for checking-in!";
+  if (message.toLowerCase().includes("refund")) {
+    reply = "Attendees can open the 'My Tickets' dashboard tab next to any booked event ticket and click 'Request Refund'. The seat is put in pending and can be approved instantly by the organizer on their stats panel.";
+  } else if (message.toLowerCase().includes("certificate")) {
+    reply = "After you have been checked-in by the organizer at the venue (which you can do using our Manual QR checkin simulation panel), a beautiful verification certificate of participation with active QR security is unlocked automatically in your attendee dashboard.";
+  } else if (message.toLowerCase().includes(" चेन्नई") || message.toLowerCase().includes("chennai")) {
+    reply = "We currently have: 'Global AI Founders Summit 2026' taking place at ITC Grand Chola, Chennai on June 15, and 'Sustainable Tech Hackathon 2026' taking place at IIT Madras Research Park. Both offer exciting points!";
+  }
+  res.json({ reply });
+});
+
+// --- PRODUCTION BUILD MIDDLEWARES ---
+if (process.env.NODE_ENV !== "production") {
+  createViteServer({
+    server: { middlewareMode: true },
+    appType: "spa",
+  }).then((vite) => {
+    app.use(vite.middlewares);
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Development full-stack server listening at http://localhost:${PORT}`);
+    });
+  });
+} else {
+  const distPath = path.join(process.cwd(), "dist");
+  app.use(express.static(distPath));
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Live production web container starting on port ${PORT}`);
   });
 }
-
-startServer();

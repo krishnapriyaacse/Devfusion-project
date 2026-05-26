@@ -1,43 +1,50 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: 'organizer' | 'attendee';
+  linkedin?: string;
+  github?: string;
+  portfolio?: string;
+  interests?: string[];
+  points?: number;
+  badges?: string[];
+  wishlist?: string[];
+}
 
 export interface TicketType {
   id: string;
-  name: string; // General Admission, VIP Experience, Early Bird Special
-  price: number; // 0 for Free
-  capacity: number;
-  remainingCapacity: number;
+  name: string;
+  price: number;
+  type: 'free' | 'paid' | 'vip' | 'early_bird';
+  description: string;
 }
 
 export interface DiscountCode {
   code: string;
-  discountPercent: number; // e.g. 25 for 25% off
-  expiryDate: string; // ISO format
+  discountPercent: number;
 }
 
-export interface Speaker {
-  name: string;
-  role: string;
-  avatar: string;
-}
-
-export interface AgendaSession {
-  id: string;
+export interface AgendaItem {
   time: string;
   title: string;
-  description: string;
   speaker: string;
+  description: string;
+}
+
+export interface FAQ {
+  question: string;
+  answer: string;
 }
 
 export interface Review {
   id: string;
+  userId: string;
   userName: string;
-  rating: number; // 1-5
-  text: string;
+  rating: number;
+  comment: string;
+  sentiment?: string; // positive, neutral, negative
   date: string;
-  linkedin?: string;
 }
 
 export interface Poll {
@@ -48,88 +55,64 @@ export interface Poll {
     text: string;
     votes: number;
   }[];
-  active: boolean;
 }
 
-export interface ChatMessage {
+export interface QAItem {
   id: string;
-  sender: string;
-  message: string;
-  timestamp: string;
+  userId: string;
+  userName: string;
+  question: string;
+  votes: number;
+  answered: boolean;
+}
+
+export interface Speaker {
+  id: string;
+  name: string;
+  role: string;
+  bio: string;
 }
 
 export interface Event {
   id: string;
   name: string;
   date: string;
-  time: string;
   venue: string;
-  city: string;
-  category: string; // e.g. Tech, Music, Arts, Food, Business, Sports
+  category: string;
   description: string;
-  bannerImage: string; // base64 or placeholder URL
-  tickets: TicketType[];
-  discounts: DiscountCode[];
-  faq: { q: string; a: string }[];
-  agenda: AgendaSession[];
+  bannerImage: string;
+  capacity: number;
+  registeredCount: number;
+  ticketTypes: TicketType[];
+  discountCodesValue?: DiscountCode[];
+  agenda: AgendaItem[];
+  faq: FAQ[];
   speakers: Speaker[];
+  liveAttendeeCount: number;
+  checkIns: string[]; // list of userIds
   reviews: Review[];
   polls: Poll[];
-  chat: ChatMessage[];
+  qa: QAItem[];
+  smartSchedule?: string;
+  organizerId: string;
 }
 
-export interface PurchasedTicket {
-  ticketTypeName: string;
-  quantity: number;
-  price: number;
-}
-
-export interface Registration {
-  id: string; // Ticket confirmation number
+export interface Booking {
+  id: string;
+  userId: string;
   eventId: string;
   eventName: string;
   eventDate: string;
-  eventTime: string;
   eventVenue: string;
-  attendeeName: string;
-  attendeeEmail: string;
-  linkedinUrl?: string; // opt-in
-  ticketsPurchased: PurchasedTicket[];
+  tickets: {
+    ticketTypeId: string;
+    ticketTypeName: string;
+    quantity: number;
+    price: number;
+  }[];
   totalAmount: number;
-  discountApplied?: string;
-  qrCode: string; // Payload string
+  bookingDate: string;
+  status: 'confirmed' | 'refund_requested' | 'refunded';
+  qrCode: string; // contains eventId:bookingId
   checkedIn: boolean;
-  checkedInAt?: string;
-  badgeEarned?: string;
-  refundRequested?: boolean;
-  refundStatus?: 'Pending' | 'Approved' | 'Rejected';
-  createdAt: string;
-}
-
-export interface UserProfile {
-  email: string;
-  name: string;
-  linkedinUrl?: string;
-  savedCategories: string[]; // For personalized advice/recommendation
-  wishlistedEvents: string[]; // Event IDs
-  attendedEventIds: string[]; // Event IDs
-  badges: {
-    name: string;
-    description: string;
-    icon: string;
-    awardedAt: string;
-  }[];
-}
-
-export interface PayoutStats {
-  totalRevenue: number;
-  payoutsCompleted: number;
-  currentBalance: number;
-  payoutsList: {
-    id: string;
-    amount: number;
-    status: 'Pending' | 'Completed';
-    date: string;
-    bankAccount: string;
-  }[];
 }

@@ -1,650 +1,356 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
+import React, { useState, useEffect } from "react";
+import {
+  Sparkles, Globe, LogIn, LogOut, LayoutDashboard, Search,
+  Calendar, MapPin, Compass, ShieldAlert, Award, Star, Info
+} from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 
-import React, { useState, useEffect } from 'react';
-import { 
-  Compass, ClipboardList, Shield, Search, Mic, MapPin, 
-  Sparkle, Calendar, Users, Briefcase, Award, ShieldCheck, Heart
-} from 'lucide-react';
-import { Event, Registration, UserProfile, PayoutStats } from './types';
-import EventCard from './components/EventCard';
-import EventDetailModal from './components/EventDetailModal';
-import CheckoutModal from './components/CheckoutModal';
-import AttendeeDashboard from './components/AttendeeDashboard';
-import OrganiserDashboard from './components/OrganiserDashboard';
+import { User, Event } from "./types";
+import AuthModal from "./components/AuthModal";
+import EventCard from "./components/EventCard";
+import EventDetails from "./components/EventDetails";
+import OrganizerDashboard from "./components/OrganizerDashboard";
+import AttendeeDashboard from "./components/AttendeeDashboard";
+import ChatbotPanel from "./components/ChatbotPanel";
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'browse' | 'attendee' | 'organiser'>('browse');
-  
-  // Core Sync States
+  const [user, setUser] = useState<User | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
-  const [registrations, setRegistrations] = useState<Registration[]>([]);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [payouts, setPayouts] = useState<PayoutStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
 
-  // Selected state
-  const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
-  const [ongoingCheckoutEvent, setOngoingCheckoutEvent] = useState<Event | null>(null);
-  
-  // Authentication states
-  const [authToken, setAuthToken] = useState<string | null>(localStorage.getItem('eventsphere_token'));
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
-  const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [authSuccess, setAuthSuccess] = useState('');
-  const [authForm, setAuthForm] = useState({
-    name: '',
-    email: '',
-    password: '',
-    linkedinUrl: '',
-    savedCategories: ['Tech'] as string[]
-  });
+  // Filter & Search states
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [searchQuery, setSearchQuery] = useState("");
 
-  // Browsing Query filters State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isVoiceSearching, setIsVoiceSearching] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [filterCity, setFilterCity] = useState('All');
-  const [filterPrice, setFilterPrice] = useState<'All' | 'Free' | 'Paid'>('All');
+  // Visual View Routings
+  const [view, setView] = useState<'discover' | 'details' | 'dashboard'>('discover');
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 
-  // Trigger loading state synchronization
+  // Auth Modals
+  const [authOpen, setAuthOpen] = useState(false);
+
+  // Load events list from fullstack express API
+  const fetchEvents = async () => {
+    try {
+      const resp = await fetch("/api/events");
+      if (resp.ok) {
+        const data = await resp.json();
+        setEvents(data);
+      }
+    } catch (err) {
+      console.error("Failed to load events from server:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Sync user state from Local Storage
   useEffect(() => {
-    syncServerState(authToken);
+    const saved = localStorage.getItem("eventsphere_user");
+    if (saved) {
+      try {
+        setUser(JSON.parse(saved));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    fetchEvents();
   }, []);
 
-  const syncServerState = async (token: string | null = authToken) => {
-    try {
-      const headersOptions = token ? { 'Authorization': `Bearer ${token}` } : {};
-      
-      const [eventsRes, regsRes, profileRes, payoutsRes] = await Promise.all([
-        fetch('/api/events'),
-        fetch('/api/registrations'),
-        fetch('/api/profiles', { headers: headersOptions }),
-        fetch('/api/payouts')
-      ]);
-
-      const [eventsData, regsData, profileData, payoutsData] = await Promise.all([
-        eventsRes.json(),
-        regsRes.json(),
-        profileRes.ok ? profileRes.json() : null,
-        payoutsRes.json()
-      ]);
-
-      setEvents(eventsData);
-      setRegistrations(regsData);
-      setUserProfile(profileRes.ok ? profileData : null);
-      setPayouts(payoutsData);
-    } catch (err) {
-      console.error('Error synchronizing EventSphere server state', err);
-    } finally {
-      setIsLoading(false);
-    }
+  // Update profile states
+  const handleAuthSuccess = (loggedUser: User) => {
+    setUser(loggedUser);
+    localStorage.setItem("eventsphere_user", JSON.stringify(loggedUser));
+    setAuthOpen(false);
+    fetchEvents(); // force sync
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('eventsphere_token');
-    setAuthToken(null);
-    setUserProfile(null);
-    setAuthForm({
-      name: '',
-      email: '',
-      password: '',
-      linkedinUrl: '',
-      savedCategories: ['Tech']
-    });
-    syncServerState(null);
+    setUser(null);
+    localStorage.removeItem("eventsphere_user");
+    setView("discover");
+    setSelectedEventId(null);
   };
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError('');
-    setAuthSuccess('');
-    setIsAuthenticating(true);
-
-    try {
-      const url = authMode === 'login' ? '/api/auth/login' : '/api/auth/signup';
-      const bodyPayload = authMode === 'login' 
-        ? { email: authForm.email, password: authForm.password }
-        : { 
-            email: authForm.email, 
-            name: authForm.name, 
-            password: authForm.password, 
-            linkedinUrl: authForm.linkedinUrl,
-            savedCategories: authForm.savedCategories 
-          };
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bodyPayload)
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Identity verification gateway error');
-      }
-
-      localStorage.setItem('eventsphere_token', data.token);
-      setAuthToken(data.token);
-      setAuthSuccess(authMode === 'login' ? 'Successfully authenticated!' : 'Account registered successfully!');
-      
-      setTimeout(() => {
-        setUserProfile(data.user);
-        syncServerState(data.token);
-        setIsAuthenticating(false);
-      }, 505);
-
-    } catch (err: any) {
-      setAuthError(err.message || 'Verification gateway unreachable. Please retry.');
-      setIsAuthenticating(false);
-    }
-  };
-
-  // Turnout voice search activation (Web Speech API)
-  const handleActivateVoiceSearch = () => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert('Voice web search speech recognitions not supported in this browser environment. Try Chrome.');
+  // Toggle user's wishlist details
+  const handleToggleWishlist = async (eventId: string) => {
+    if (!user) {
+      setAuthOpen(true);
       return;
     }
 
-    setIsVoiceSearching(true);
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
+    const currentWish = user.wishlist || [];
+    let updatedWish: string[] = [];
 
-    recognition.onresult = (event: any) => {
-      const voiceResultText = event.results[0][0].transcript;
-      setSearchQuery(voiceResultText);
-      setIsVoiceSearching(false);
-    };
+    if (currentWish.includes(eventId)) {
+      updatedWish = currentWish.filter(id => id !== eventId);
+    } else {
+      updatedWish = [...currentWish, eventId];
+    }
 
-    recognition.onerror = () => {
-      setIsVoiceSearching(false);
-    };
+    const updatedUser: User = { ...user, wishlist: updatedWish };
+    setUser(updatedUser);
+    localStorage.setItem("eventsphere_user", JSON.stringify(updatedUser));
 
-    recognition.onend = () => {
-      setIsVoiceSearching(false);
-    };
-
-    recognition.start();
-  };
-
-  // Toggle wishlist state (in browser and user profiles)
-  const handleToggleWishlist = async (eventId: string) => {
-    if (!userProfile) return;
-    const isWishlisted = userProfile.wishlistedEvents.includes(eventId);
-    const updatedWishlist = isWishlisted 
-      ? userProfile.wishlistedEvents.filter(id => id !== eventId)
-      : [...userProfile.wishlistedEvents, eventId];
-
+    // Update on backend
     try {
-      const response = await fetch('/api/profiles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wishlistedEvents: updatedWishlist })
+      await fetch("/api/auth/update-profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: user.id,
+          wishlist: updatedWish
+        })
       });
-      const data = await response.json();
-      if (response.ok) {
-        setUserProfile(data);
-      }
-    } catch (err) {
-      console.error(err);
+    } catch (e) {
+      console.error(e);
     }
   };
 
-  // Filtering Logic
-  const filteredEvents = events.filter(e => {
-    const matchSearch = e.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                        e.description.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchCategory = selectedCategory === 'All' || e.category === selectedCategory;
+  // Filter categories
+  const categoriesList = ["All", "Tech & AI", "Music & Arts", "Green Tech", "Health & Wellness", "Business & Startups"];
 
-    // Cities extraction filtering
-    const matchCity = filterCity === 'All' || e.city.toLowerCase() === filterCity.toLowerCase();
-
-    // Free vs Paid filtering
-    const isFreeEvent = e.tickets.some(t => t.price === 0);
-    const matchPrice = filterPrice === 'All' 
-      ? true 
-      : filterPrice === 'Free' 
-        ? isFreeEvent 
-        : !isFreeEvent;
-
-    return matchSearch && matchCategory && matchCity && matchPrice;
+  const filteredEvents = events.filter((evt) => {
+    const matchesCategory = categoryFilter === "All" || evt.category === categoryFilter;
+    const matchesSearch =
+      evt.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      evt.venue.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      evt.description.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesCategory && matchesSearch;
   });
 
-  // Extract all distinct cities list
-  const distinctCities = ['All', ...new Set(events.map(e => e.city).filter(Boolean))];
+  const activeEvent = events.find(e => e.id === selectedEventId);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-between selection:bg-blue-600 selection:text-white" id="eventsphere-root">
-      
-      {/* 1. Header Toolbar Navbar */}
-      <header className="sticky top-0 z-40 w-full border-b border-slate-100 bg-white/95 backdrop-blur-md" id="main-navigation-header">
-        <div className="mx-auto flex max-w-7xl h-16 items-center justify-between px-4 sm:px-6">
-          
-          {/* Logo Name */}
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setCurrentTab('browse')}>
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white font-heading font-extrabold text-xl shadow-lg shadow-blue-600/20">
-              E
-            </span>
-            <span className="font-heading text-lg font-bold tracking-tight text-slate-900">
-              Event<span className="text-blue-600">Sphere</span>
-            </span>
-            <span className="hidden sm:inline-flex rounded-full bg-blue-50 px-2 py-0.5 font-mono text-[9px] font-bold text-blue-700 uppercase tracking-widest">
-              Full-Stack AI
-            </span>
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-850 flex flex-col font-sans select-none pb-20">
+      {/* Decorative Atmosphere header lighting */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[300px] bg-indigo-500/5 blur-3xl rounded-full pointer-events-none -z-10 animate-pulse-slow" />
+
+      {/* Primary Navigation Header */}
+      <header className="sticky top-0 z-40 bg-[#FFFFFF]/90 backdrop-blur-md border-b border-slate-200/80 px-6 py-4 flex items-center justify-between shadow-xs">
+        <div
+          onClick={() => { setView("discover"); setSelectedEventId(null); }}
+          className="flex items-center gap-2.5 cursor-pointer hover:opacity-90 duration-150"
+        >
+          <div className="w-9 h-9 bg-gradient-to-tr from-indigo-600 to-purple-600 rounded-xl flex items-center justify-center font-display shadow-md shadow-indigo-150">
+            <Sparkles className="w-4 h-4 text-white" />
           </div>
+          <div>
+            <span className="font-display font-extrabold text-slate-900 text-base tracking-tight block">EventSphere</span>
+            <span className="text-[9px] text-slate-500 font-mono block tracking-wider uppercase font-bold">Future Gateway</span>
+          </div>
+        </div>
 
-          {/* Nav Tab Swappers */}
-          <nav className="flex items-center gap-1">
-            {[
-              { id: 'browse', name: 'Discover Events', icon: Compass },
-              { id: 'attendee', name: 'Attendee Portal', icon: ClipboardList },
-              { id: 'organiser', name: 'Organiser Desk', icon: Shield }
-            ].map(tab => {
-              const Icon = tab.icon;
-              const isSelected = currentTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => {
-                    setCurrentTab(tab.id as any);
-                    setSelectedEvent(null);
-                  }}
-                  className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold font-heading transition-all cursor-pointer ${
-                    isSelected 
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-500/10' 
-                      : 'text-slate-650 hover:bg-slate-50'
-                  }`}
-                  id={`nav-tab-${tab.id}`}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span className="hidden md:inline">{tab.name}</span>
-                </button>
-              );
-            })}
-          </nav>
+        {/* Action Controls */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { setView("discover"); setSelectedEventId(null); }}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold select-none cursor-pointer duration-150 ${
+              view === "discover"
+                ? "bg-indigo-50 border border-indigo-100 text-indigo-700 font-bold"
+                : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/50"
+            }`}
+          >
+            Explore Pass
+          </button>
 
-          {/* User badge identifier card */}
-          {userProfile ? (
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-2 bg-slate-50 border p-1 rounded-full text-xs font-semibold text-slate-800">
-                <span className="h-6 w-6 rounded-full bg-blue-105 text-blue-700 flex items-center justify-center font-bold">
-                  {userProfile.name?.charAt(0) || 'U'}
-                </span>
-                <span className="hidden sm:inline-block pr-2 truncate max-w-[100px]">{userProfile.name}</span>
+          {user && (
+            <button
+              onClick={() => { setView("dashboard"); setSelectedEventId(null); }}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold select-none cursor-pointer duration-150 flex items-center gap-1.5 ${
+                view === "dashboard"
+                  ? "bg-indigo-50 border border-indigo-100 text-indigo-700 font-bold"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-100/50"
+              }`}
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              {user.role === "organizer" ? "Command Hub" : "My Profile Page"}
+            </button>
+          )}
+
+          {user ? (
+            <div className="flex items-center gap-3 pl-2.5 border-l border-slate-200">
+              <div className="hidden md:block text-right">
+                <span className="text-xs font-bold text-slate-800 block">{user.name}</span>
+                <span className="text-[9px] uppercase font-mono text-slate-500 font-bold block">{user.role}</span>
               </div>
               <button
-                type="button"
                 onClick={handleLogout}
-                className="rounded-lg border border-slate-205 px-2.5 py-1 text-[11px] font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="p-2 bg-slate-100 hover:bg-slate-200 border border-slate-205 rounded-xl text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer hover:text-rose-600"
+                title="Sign out of EventSphere"
               >
-                Sign Out
+                <LogOut className="w-3.5 h-3.5" />
               </button>
             </div>
           ) : (
             <button
-              type="button"
-              onClick={() => {
-                setCurrentTab('attendee');
-                setAuthMode('login');
-              }}
-              className="rounded-xl bg-slate-900 hover:bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-all shadow-md shadow-slate-900/10 cursor-pointer"
+              id="btn-login"
+              onClick={() => setAuthOpen(true)}
+              className="px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold rounded-xl text-xs tracking-wide shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
             >
+              <LogIn className="w-3.5 h-3.5" />
               Sign In
             </button>
           )}
         </div>
       </header>
 
-      {/* 2. Main Body dynamic layout */}
-      <main className="flex-1 px-4 sm:px-6 py-8" id="eventsphere-main-container">
-        
-        {isLoading ? (
-          <div className="flex h-[50vh] items-center justify-center flex-col gap-3">
-            <div className="h-8 w-8 animate-spin rounded-full border-3 border-blue-600 border-t-transparent" />
-            <span className="text-xs font-semibold text-slate-500 font-heading">Synchronizing database vectors...</span>
-          </div>
-        ) : (
-          <>
-            {/* VIEW A: SEARCH & BROWSE DISCOVERY EVENTS */}
-            {currentTab === 'browse' && (
-              <div className="space-y-8 animate-fadeIn" id="browse-events-pane">
-                
-                {/* Hero Search Section heading */}
-                <div className="text-center max-w-2xl mx-auto space-y-3">
-                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-[10px] font-bold text-blue-700 uppercase tracking-widest">
-                    <Sparkle className="h-3.5 w-3.5 fill-blue-500 text-blue-500 animate-pulse" />
-                    AI-Powered Discovery Engine
-                  </span>
-                  <h1 className="font-heading text-3xl font-extrabold tracking-tight text-slate-900 md:text-5xl leading-tight">
-                    Premium Curation & Seamless Sandbox Ticketing
-                  </h1>
-                  <p className="text-sm text-slate-550 leading-relaxed">
-                    EventSphere simplifies how modern technical communities schedule conferences, purchase multi-ticket bookings, audit secure access entries, and network live.
-                  </p>
-                </div>
-
-                {/* Filter and Search Bar Row */}
-                <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm max-w-4xl mx-auto flex flex-col md:flex-row gap-3">
-                  {/* Search query field */}
-                  <div className="relative flex-1">
-                    <Search className="absolute top-2.5 left-3.5 h-4 w-4 text-slate-400" />
-                    <input 
-                      type="text"
-                      placeholder="Search summit names, agendas, speakers details..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50/50 pl-10 pr-10 py-2.5 text-xs text-slate-800 focus:outline-hidden focus:border-blue-500 focus:bg-white"
-                    />
-                    
-                    {/* Voice activated speech recognition */}
-                    <button
-                      type="button"
-                      onClick={handleActivateVoiceSearch}
-                      className={`absolute right-3 top-2.5 flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:text-blue-700 transition-colors ${
-                        isVoiceSearching ? 'text-blue-600 animate-ping' : ''
-                      }`}
-                      title="Voice Speech activated lookup search"
-                      aria-label="Voice Activation Search"
-                      id="voice-search-trigger"
-                    >
-                      <Mic className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  {/* City dropdown */}
-                  <div className="w-full md:w-36">
-                    <select
-                      value={filterCity}
-                      onChange={(e) => setFilterCity(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50/50 p-2 text-xs font-semibold text-slate-700 focus:outline-hidden focus:border-blue-500 cursor-pointer h-[38px]"
-                    >
-                      {distinctCities.map((city, idx) => (
-                        <option key={idx} value={city}>
-                          {city === 'All' ? 'Every City' : city}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Price dropdown */}
-                  <div className="w-full md:w-36">
-                    <select
-                      value={filterPrice}
-                      onChange={(e) => setFilterPrice(e.target.value as any)}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50/50 p-2 text-xs font-semibold text-slate-700 focus:outline-hidden focus:border-blue-500 cursor-pointer h-[38px]"
-                    >
-                      <option value="All">All Budgets</option>
-                      <option value="Free">Free entry RSVP</option>
-                      <option value="Paid">Paid pass options</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Categories filtering horizontal trail */}
-                <div className="flex flex-wrap items-center justify-center gap-1.5 max-w-2xl mx-auto text-xs font-medium">
-                  {['All', 'Tech', 'Music', 'Arts', 'Food', 'Sports'].map(cat => {
-                    const isSelected = selectedCategory === cat;
-                    return (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => setSelectedCategory(cat)}
-                        className={`rounded-full px-4 py-1.5 font-heading text-xs font-bold transition-all cursor-pointer ${
-                          isSelected 
-                            ? 'bg-blue-600 text-white shadow-md' 
-                            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        {cat === 'All' ? 'Every Track' : cat}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Event Cards Grid */}
-                {filteredEvents.length === 0 ? (
-                  <div className="text-center py-16 rounded-3xl border border-dashed border-slate-200 text-slate-400 text-sm max-w-md mx-auto">
-                    <Compass className="h-10 w-10 mx-auto text-slate-350 mb-2 animate-pulse" />
-                    No matched event listings recorded under current filters. Try relaxing keywords!
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
-                    {filteredEvents.map(event => (
-                      <EventCard 
-                        key={event.id}
-                        event={event}
-                        isWishlisted={userProfile?.wishlistedEvents?.includes(event.id) || false}
-                        onToggleWishlist={() => handleToggleWishlist(event.id)}
-                        onSelect={() => setSelectedEvent(event)}
-                      />
-                    ))}
-                  </div>
-                )}
-
-              </div>
-            )}
-
-            {/* VIEW B: USER PORTAL ATTENDEE ACCOUNT HUB */}
-            {currentTab === 'attendee' && (
-              userProfile ? (
-                <div className="space-y-6">
-                  <AttendeeDashboard 
-                    userProfile={userProfile}
-                    registrations={registrations}
-                    events={events}
-                    authToken={authToken}
-                    onUpdateProfile={(updated) => {
-                      setUserProfile(updated);
-                      syncServerState();
-                    }}
-                    onRefreshRegistrations={syncServerState}
-                  />
-                </div>
-              ) : (
-                <div className="max-w-md mx-auto bg-white rounded-3xl border border-slate-100 p-8 shadow-xl space-y-6 animate-fadeIn" id="auth-gateway-container">
-                  <div className="text-center space-y-2">
-                    <span className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 font-heading font-black text-xl shadow-xs">
-                      E
-                    </span>
-                    <h2 className="font-heading text-2xl font-bold text-slate-900 tracking-tight">
-                      {authMode === 'login' ? 'Sign In to EventSphere' : 'Create Your Account'}
-                    </h2>
-                    <p className="text-xs text-slate-500">
-                      {authMode === 'login' 
-                        ? 'Access your personal ticketing ledgers, custom badges, and AI personalized discovery recommendations.' 
-                        : 'Register with EventSphere to secure tickets, curate agenda suggestions, and earn gamified trophies.'
-                      }
-                    </p>
-                  </div>
-
-                  {/* Auth mode toggle */}
-                  <div className="grid grid-cols-2 p-1.5 bg-slate-50 rounded-2xl border text-xs font-bold leading-none select-none">
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        setAuthMode('login');
-                        setAuthError('');
-                        setAuthSuccess('');
-                      }}
-                      className={`py-2 text-center rounded-xl cursor-pointer transition-all ${
-                        authMode === 'login' 
-                          ? 'bg-white text-slate-900 shadow-xs' 
-                          : 'text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      Sign In
-                    </button>
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        setAuthMode('signup');
-                        setAuthError('');
-                        setAuthSuccess('');
-                      }}
-                      className={`py-2 text-center rounded-xl cursor-pointer transition-all ${
-                        authMode === 'signup' 
-                          ? 'bg-white text-slate-900 shadow-xs' 
-                          : 'text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      Register
-                    </button>
-                  </div>
-
-                  <form onSubmit={handleAuthSubmit} className="space-y-4">
-                    {authError && (
-                      <div className="rounded-xl border border-rose-100 bg-rose-50 text-rose-850 font-semibold p-3 text-center text-[11px]">
-                        {authError}
-                      </div>
-                    )}
-                    {authSuccess && (
-                      <div className="rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-850 font-semibold p-3 text-center text-[11px]">
-                        {authSuccess}
-                      </div>
-                    )}
-
-                    {authMode === 'signup' && (
-                      <>
-                        <div className="space-y-1">
-                          <label className="block text-[10px] uppercase font-bold text-slate-400">Full Name</label>
-                          <input 
-                            type="text"
-                            required
-                            value={authForm.name}
-                            onChange={(e) => setAuthForm(prev => ({ ...prev, name: e.target.value }))}
-                            placeholder="e.g. John Doe"
-                            className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs text-slate-800 focus:outline-hidden focus:border-blue-500"
-                          />
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="block text-[10px] uppercase font-bold text-slate-400">LinkedIn Profile (Optional)</label>
-                          <input 
-                            type="url"
-                            value={authForm.linkedinUrl}
-                            onChange={(e) => setAuthForm(prev => ({ ...prev, linkedinUrl: e.target.value }))}
-                            placeholder="https://linkedin.com/in/username"
-                            className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs text-slate-800 focus:outline-hidden focus:border-blue-500"
-                          />
-                        </div>
-                      </>
-                    )}
-
-                    <div className="space-y-1">
-                      <label className="block text-[10px] uppercase font-bold text-slate-400">Email Address</label>
-                      <input 
-                        type="email"
-                        required
-                        value={authForm.email}
-                        onChange={(e) => setAuthForm(prev => ({ ...prev, email: e.target.value }))}
-                        placeholder="example@yourdomain.com"
-                        className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs text-slate-800 focus:outline-hidden focus:border-blue-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex justify-between items-center text-[10px] uppercase font-bold text-slate-400">
-                        <span>Password</span>
-                        {authMode === 'login' && (
-                          <span className="text-slate-450 lowercase hover:text-blue-600 cursor-help" title="Demo database hint: try password123">
-                            demo: password123
-                          </span>
-                        )}
-                      </div>
-                      <input 
-                        type="password"
-                        required
-                        value={authForm.password}
-                        onChange={(e) => setAuthForm(prev => ({ ...prev, password: e.target.value }))}
-                        placeholder="••••••••"
-                        className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs text-slate-800 focus:outline-hidden focus:border-blue-500"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={isAuthenticating}
-                      className="w-full rounded-xl bg-blue-600 hover:bg-blue-700 font-heading text-xs font-bold text-white py-3 transition-colors cursor-pointer mt-2 disabled:bg-blue-400"
-                    >
-                      {isAuthenticating 
-                        ? 'Verifying Ident credentials...' 
-                        : authMode === 'login' ? 'Sign In Now' : 'Create Account Portfolio'
-                      }
-                    </button>
-                  </form>
-                </div>
-              )
-            )}
-
-            {/* VIEW C: ORGANISER OPERATIONS AREA */}
-            {currentTab === 'organiser' && payouts && (
-              <div className="space-y-6">
-                <OrganiserDashboard 
-                  events={events}
-                  registrations={registrations}
-                  payouts={payouts}
-                  onEventCreated={syncServerState}
-                  onRefreshRegistrations={syncServerState}
+      {/* Primary body frame container */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-8">
+        <AnimatePresence mode="wait">
+          {loading ? (
+            <div className="py-24 flex flex-col items-center justify-center space-y-3">
+              <span className="w-8 h-8 border-3 border-violet-500/20 border-t-violet-500 rounded-full animate-spin" />
+              <span className="text-xs text-slate-400 font-mono tracking-widest">Querying event matrices...</span>
+            </div>
+          ) : view === "discover" ? (
+            <motion.div
+              key="discover"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              className="space-y-8"
+            >
+              {activeEvent ? (
+                /* Dynamic Detailed Event view overlay details */
+                <EventDetails
+                  event={activeEvent}
+                  user={user}
+                  onBack={() => { setSelectedEventId(null); }}
+                  onBookingSuccess={fetchEvents}
+                  isWishlisted={user?.wishlist?.includes(activeEvent.id) || false}
+                  onToggleWishlist={() => handleToggleWishlist(activeEvent.id)}
+                  onLoginTrigger={() => setAuthOpen(true)}
                 />
-              </div>
-            )}
-          </>
-        )}
+              ) : (
+                <>
+                  {/* Hero Board Banner */}
+                  <div className="bg-gradient-to-r from-indigo-600 via-indigo-600 to-purple-700 text-white p-8 rounded-3xl relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm shadow-indigo-100">
+                    <div className="absolute inset-0 bg-white/5 blur-3xl rounded-full" />
+                    <div className="space-y-4 text-center md:text-left relative z-10 max-w-xl">
+                      <span className="bg-white/20 border border-white/20 px-3 py-1 text-[10px] text-white uppercase tracking-widest font-bold tracking-widest rounded-full font-mono">
+                        Experience Universe
+                      </span>
+                      <h1 className="text-2xl md:text-4xl font-display font-extrabold text-white leading-tight tracking-tight">
+                        Disburse event coordinates, secure beautiful tickets.
+                      </h1>
+                      <p className="text-xs md:text-sm text-indigo-100 font-normal leading-relaxed">
+                        Discover outstanding local and global gatherings, verify and exchange LinkedIn contacts organically, and solve questions on the fly using Gemini AI models.
+                      </p>
+                    </div>
+                    {/* Floating illustration card decoration */}
+                    <div className="w-40 h-40 shrink-0 relative flex items-center justify-center p-3 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl select-none rotate-3 hover:rotate-0 duration-300 shadow-xl">
+                      <div className="w-full h-full bg-indigo-950/30 rounded-xl flex flex-col justify-between p-3.5 text-xs">
+                        <Star className="w-5 h-5 text-yellow-300 fill-yellow-300 animate-pulse" />
+                        <div>
+                          <div className="font-extrabold text-white leading-tight">SUMMIT PASS</div>
+                          <span className="text-[9px] text-white/75 font-mono">Verified Security</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
 
+                  {/* Navigation controls, search matches and category filters */}
+                  <div className="space-y-4">
+                    <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-white p-4 border border-slate-200 rounded-2xl shadow-xs">
+                      {/* Search Bar */}
+                      <div className="relative w-full md:max-w-md">
+                        <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
+                        <input
+                          id="inp-search"
+                          type="text"
+                          placeholder="Search EventSphere tickets..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl text-xs pl-10 pr-4 py-2.5 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:bg-white transition-all"
+                        />
+                      </div>
+
+                      {/* Filters */}
+                      <div className="flex gap-1.5 overflow-x-auto select-none no-scrollbar w-full md:w-auto">
+                        {categoriesList.map((cat) => (
+                          <button
+                            key={cat}
+                            onClick={() => setCategoryFilter(cat)}
+                            className={`px-3.5 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap transition-all border cursor-pointer ${
+                              categoryFilter === cat
+                                ? "bg-indigo-600 border-indigo-600 text-white shadow-sm"
+                                : "bg-transparent border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+                            }`}
+                          >
+                            {cat}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Events Grid layout */}
+                    {filteredEvents.length > 0 ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {filteredEvents.map((evt) => (
+                          <EventCard
+                            key={evt.id}
+                            event={evt}
+                            onClick={() => { setSelectedEventId(evt.id); }}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-20 bg-white border border-slate-200 rounded-2xl space-y-2 shadow-xs">
+                        <Info className="w-8 h-8 text-slate-400 mx-auto" />
+                        <h3 className="text-xs font-bold text-slate-700">No events matched query search.</h3>
+                        <p className="text-[10px] text-slate-500">Try different filters or change keyword metrics.</p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </motion.div>
+          ) : view === "dashboard" && user ? (
+            <motion.div
+              key="dashboard"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+            >
+              {user.role === "organizer" ? (
+                <OrganizerDashboard
+                  user={user}
+                  onEventCreated={fetchEvents}
+                  eventsList={events}
+                />
+              ) : (
+                <AttendeeDashboard
+                  user={user}
+                  eventsList={events}
+                  onOpenEvent={(id) => { setSelectedEventId(id); setView("discover"); }}
+                  onRefresh={fetchEvents}
+                  onUpdateUser={(updated) => { setUser(updated); localStorage.setItem("eventsphere_user", JSON.stringify(updated)); }}
+                />
+              )}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
       </main>
 
-      {/* 3. Immersive Modals list */}
-      
-      {/* Detail Modal Sheet view */}
-      {selectedEvent && (
-        <EventDetailModal 
-          event={selectedEvent}
-          userName={userProfile?.name || 'Jane Smith'}
-          userEmail={userProfile?.email || 'jaishreer2206@gmail.com'}
-          userLinkedin={userProfile?.linkedinUrl}
-          onClose={() => setSelectedEvent(null)}
-          onOpenCheckout={() => {
-            setOngoingCheckoutEvent(selectedEvent);
-            setSelectedEvent(null);
-          }}
-          onRefreshEvent={(updated) => {
-            setEvents(prev => prev.map(e => e.id === updated.id ? updated : e));
-            setSelectedEvent(updated);
-          }}
-        />
-      )}
-
-      {/* SECURE CHECKOUT PAYMENTS MODAL */}
-      {ongoingCheckoutEvent && (
-        <CheckoutModal 
-          event={ongoingCheckoutEvent}
-          userName={userProfile?.name || 'Jane Smith'}
-          userEmail={userProfile?.email || 'jaishreer2206@gmail.com'}
-          authToken={authToken}
-          onClose={() => setOngoingCheckoutEvent(null)}
-          onSuccess={(reg) => {
-            // Secure booking complete successfully close modal and launch attendee portal to view tickets confirmation
-            setOngoingCheckoutEvent(null);
-            setCurrentTab('attendee');
-            syncServerState();
-          }}
-        />
-      )}
-
-      {/* Footer Branding notes */}
-      <footer className="shrink-0 bg-slate-900 text-slate-500 py-6 border-t border-slate-800 text-xs text-center" id="footer-branding-label">
-        <p>© 2026 EventSphere Platform Inc. All permissions, ticketing ledgers, and payout releases are handled entirely in virtual sandbox limits.</p>
-        <p className="mt-1 font-mono text-[10px]">Configured at Cloud Resource: 3000 Ingress Routing</p>
+      {/* Footer System credits */}
+      <footer className="mt-auto border-t border-slate-200 py-6 text-center text-[10px] text-slate-400 font-mono tracking-widest uppercase">
+        © 2026 EventSphere Platform Ecosystem • Dual Dashboards Unlocked
       </footer>
 
+      {/* Floating conversational SphereBot chatbot support widget */}
+      <ChatbotPanel />
+
+      {/* Registration and Login modal support */}
+      <AnimatePresence>
+        {authOpen && (
+          <AuthModal
+            isOpen={authOpen}
+            onClose={() => setAuthOpen(false)}
+            onAuthSuccess={handleAuthSuccess}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
